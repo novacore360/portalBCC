@@ -1,442 +1,468 @@
-import React, { useState, useCallback } from 'react';
-import './App.css';
+// Add this to your server/index.js after the existing endpoints
 
-const API = process.env.REACT_APP_API_URL || '';
+const nodemailer = require('nodemailer');
+const ExcelJS = require('exceljs');
 
-// ── Utility ──────────────────────────────────────────────────────────────────
+// ── Email configuration ──────────────────────────────────────────────────────
 
-function gradeColor(grade) {
-  const g = parseFloat(grade);
-  if (isNaN(g)) return 'var(--text-muted)';
-  if (g <= 1.5) return '#5AC8FA';
-  if (g <= 2.5) return '#34C759';
-  if (g <= 3.0) return '#FFD60A';
-  return '#FF453A';
-}
-
-function semesterLabel(sem) {
-  if (!sem || sem === 'N/A') return '';
-  const s = sem.toLowerCase();
-  if (s.includes('1st') || s === '1') return '1st Semester';
-  if (s.includes('2nd') || s === '2') return '2nd Semester';
-  if (s.includes('summer')) return 'Summer';
-  return sem;
-}
-
-function formatEnrollmentTitle(schoolYear, semester) {
-  const sem = semesterLabel(semester) || semester;
-  if (schoolYear && schoolYear !== 'N/A' && sem) {
-    return `${schoolYear} | ${sem}`;
+// Configure your Gmail SMTP settings
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER || 'your-email@gmail.com',
+    pass: process.env.EMAIL_PASS || 'your-app-password'
   }
-  return schoolYear || sem || 'N/A';
-}
+});
 
-function formatStudentName(name) {
-  if (!name) return '';
-  if (name.includes(',')) {
-    const parts = name.split(',');
-    if (parts.length === 2) {
-      const lastName = parts[0].trim();
-      const firstName = parts[1].trim();
-      return `${firstName} ${lastName}`;
-    }
-  }
-  return name;
-}
+// ── Generate HTML email with grades table ──────────────────────────────────
 
-function formatCourseAndYear(course, yearLevel) {
-  const parts = [];
-  if (course) parts.push(course);
-  if (yearLevel) parts.push(yearLevel);
-  return parts.length > 0 ? parts.join(' | ') : '';
-}
+function generateGradeEmailHTML(studentName, studentId, schoolYear, semester, course, yearLevel, grades, gwa, remarks) {
+  const gradeRows = grades.map(g => `
+    <tr>
+      <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0;">${g.subjectCode || ''}</td>
+      <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0;">${g.subjectTitle || ''}</td>
+      <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0; text-align: center;">${g.units || ''}</td>
+      <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0; text-align: center;">${g.midterm || ''}</td>
+      <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0; text-align: center;">${g.finals || ''}</td>
+      <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0; text-align: center; font-weight: 600;">${g.finalGrade || ''}</td>
+      <td style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0; text-align: center;">
+        <span style="display: inline-block; padding: 2px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; ${g.remarks?.toLowerCase().includes('pass') ? 'background: #d4edda; color: #155724;' : 'background: #f8d7da; color: #721c24;'}">
+          ${g.remarks || 'N/A'}
+        </span>
+      </td>
+    </tr>
+  `).join('');
 
-// ── Components ────────────────────────────────────────────────────────────────
+  return `
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grade Report - ${studentName}</title>
+    <style>
+      body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        margin: 0;
+        padding: 0;
+        background: #f7fafc;
+        color: #1a202c;
+      }
+      .container {
+        max-width: 800px;
+        margin: 20px auto;
+        background: #ffffff;
+        border-radius: 16px;
+        box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+        overflow: hidden;
+      }
+      .header {
+        background: linear-gradient(135deg, #0A2414 0%, #143D20 100%);
+        padding: 32px 40px;
+        border-bottom: 4px solid #C9A84C;
+      }
+      .header h1 {
+        color: #E2C36A;
+        margin: 0 0 4px 0;
+        font-size: 28px;
+        font-weight: 700;
+        letter-spacing: -0.5px;
+      }
+      .header .subtitle {
+        color: #B8C9A8;
+        font-size: 14px;
+        margin: 0;
+      }
+      .header .gold-line {
+        width: 60px;
+        height: 3px;
+        background: #C9A84C;
+        margin-top: 12px;
+        border-radius: 2px;
+      }
+      .student-info {
+        padding: 24px 40px;
+        background: #f9fafb;
+        border-bottom: 1px solid #e2e8f0;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px 24px;
+      }
+      .student-info .label {
+        font-size: 12px;
+        color: #6B7280;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .student-info .value {
+        font-size: 15px;
+        font-weight: 500;
+        color: #1a202c;
+      }
+      .gwa-section {
+        padding: 20px 40px;
+        background: #f0fdf4;
+        border-bottom: 1px solid #e2e8f0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+      .gwa-section .gwa-label {
+        font-size: 14px;
+        font-weight: 600;
+        color: #065f46;
+      }
+      .gwa-section .gwa-value {
+        font-size: 28px;
+        font-weight: 700;
+        color: #065f46;
+        letter-spacing: -1px;
+      }
+      .gwa-section .gwa-remarks {
+        display: inline-block;
+        padding: 4px 16px;
+        border-radius: 20px;
+        font-size: 13px;
+        font-weight: 600;
+        ${remarks?.toLowerCase().includes('pass') ? 'background: #d4edda; color: #155724;' : 'background: #f8d7da; color: #721c24;'}
+      }
+      .table-wrap {
+        padding: 24px 40px 32px;
+        overflow-x: auto;
+      }
+      .table-wrap h2 {
+        font-size: 16px;
+        font-weight: 600;
+        color: #1a202c;
+        margin: 0 0 16px 0;
+        letter-spacing: -0.2px;
+      }
+      .grade-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+      .grade-table thead th {
+        background: #f1f5f9;
+        padding: 10px 12px;
+        text-align: left;
+        font-weight: 600;
+        color: #1e293b;
+        border-bottom: 2px solid #e2e8f0;
+      }
+      .grade-table tbody td {
+        padding: 10px 12px;
+        border-bottom: 1px solid #e2e8f0;
+        color: #334155;
+      }
+      .grade-table tbody tr:hover {
+        background: #f8fafc;
+      }
+      .footer {
+        padding: 20px 40px;
+        background: #f9fafb;
+        border-top: 1px solid #e2e8f0;
+        text-align: center;
+        font-size: 13px;
+        color: #6B7280;
+      }
+      .footer a {
+        color: #C9A84C;
+        text-decoration: none;
+      }
+      .footer a:hover {
+        text-decoration: underline;
+      }
+      @media (max-width: 600px) {
+        .header { padding: 24px 20px; }
+        .student-info { padding: 16px 20px; grid-template-columns: 1fr; gap: 4px; }
+        .gwa-section { padding: 16px 20px; flex-direction: column; align-items: flex-start; }
+        .table-wrap { padding: 16px 20px; }
+        .grade-table { font-size: 12px; }
+        .grade-table thead th, .grade-table tbody td { padding: 6px 8px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>📘 Buenavista Community College</h1>
+        <p class="subtitle">Official Grade Report</p>
+        <div class="gold-line"></div>
+      </div>
 
-function Spinner() {
-  return (
-    <div className="spinner-wrap">
-      <div className="spinner" />
-    </div>
-  );
-}
-
-function ErrorBanner({ message, onDismiss }) {
-  return (
-    <div className="error-banner" role="alert">
-      <span>{message}</span>
-      <button className="error-dismiss" onClick={onDismiss} aria-label="Dismiss">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-        </svg>
-      </button>
-    </div>
-  );
-}
-
-function LookupScreen({ onResult }) {
-  const [studentId, setStudentId] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  const handleSubmit = useCallback(async () => {
-    const id = studentId.trim();
-    if (!id) { setError('Enter your student ID to continue.'); return; }
-    setError('');
-    setLoading(true);
-    try {
-      const res = await fetch(`${API}/api/enrollments/${encodeURIComponent(id)}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Something went wrong.');
-      onResult(data);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [studentId, onResult]);
-
-  const handleKey = (e) => { if (e.key === 'Enter') handleSubmit(); };
-
-  return (
-    <div className="screen lookup-screen">
-      <div className="lookup-inner">
-        <div className="brand">
-          <div className="brand-icon">
-            <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-              <rect x="3" y="3" width="9" height="9" rx="2" fill="currentColor" opacity="0.9"/>
-              <rect x="16" y="3" width="9" height="9" rx="2" fill="currentColor" opacity="0.5"/>
-              <rect x="3" y="16" width="9" height="9" rx="2" fill="currentColor" opacity="0.5"/>
-              <rect x="16" y="16" width="9" height="9" rx="2" fill="currentColor" opacity="0.9"/>
-            </svg>
-          </div>
-          <div className="brand-text">
-            <span className="brand-name">BCC Portal</span>
-            <span className="brand-sub">Buenavista Community College</span>
-          </div>
+      <div class="student-info">
+        <div>
+          <div class="label">Student Name</div>
+          <div class="value">${studentName || 'N/A'}</div>
         </div>
-
-        <div className="glass-card lookup-card">
-          <h1 className="lookup-title">Student Records</h1>
-          <p className="lookup-desc">Enter your student ID to view your enrollment history and grades.</p>
-
-          <div className="field-group">
-            <label className="field-label" htmlFor="studentId">Student ID</label>
-            <input
-              id="studentId"
-              className="field-input"
-              type="text"
-              value={studentId}
-              onChange={e => setStudentId(e.target.value)}
-              onKeyDown={handleKey}
-              placeholder="e.g. ****-****"
-              autoComplete="off"
-              autoCapitalize="none"
-              spellCheck={false}
-              disabled={loading}
-            />
-          </div>
-
-          {error && <ErrorBanner message={error} onDismiss={() => setError('')} />}
-
-          <button
-            className="btn-primary"
-            onClick={handleSubmit}
-            disabled={loading || !studentId.trim()}
-          >
-            {loading ? <><Spinner /> Retrieving records</> : 'View Records'}
-          </button>
+        <div>
+          <div class="label">Student ID</div>
+          <div class="value">${studentId || 'N/A'}</div>
         </div>
+        <div>
+          <div class="label">Course</div>
+          <div class="value">${course || 'N/A'}</div>
+        </div>
+        <div>
+          <div class="label">Year Level</div>
+          <div class="value">${yearLevel || 'N/A'}</div>
+        </div>
+        <div>
+          <div class="label">School Year</div>
+          <div class="value">${schoolYear || 'N/A'}</div>
+        </div>
+        <div>
+          <div class="label">Semester</div>
+          <div class="value">${semester || 'N/A'}</div>
+        </div>
+      </div>
 
-        <p className="footer-note">Data is fetched directly from the BCC portal.</p>
+      ${gwa && gwa !== 'N/A' ? `
+      <div class="gwa-section">
+        <span class="gwa-label">📊 General Weighted Average</span>
+        <span class="gwa-value">${gwa}</span>
+        <span class="gwa-remarks">${remarks || 'N/A'}</span>
+      </div>
+      ` : ''}
+
+      <div class="table-wrap">
+        <h2>📋 Subject Grades</h2>
+        ${grades && grades.length > 0 ? `
+        <table class="grade-table">
+          <thead>
+            <tr>
+              <th>Subject Code</th>
+              <th>Description</th>
+              <th style="text-align:center;">Units</th>
+              <th style="text-align:center;">Midterm</th>
+              <th style="text-align:center;">Finals</th>
+              <th style="text-align:center;">Final Grade</th>
+              <th style="text-align:center;">Remarks</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${gradeRows}
+          </tbody>
+        </table>
+        ` : `
+        <p style="color: #6B7280; text-align: center; padding: 24px 0;">No grade records available.</p>
+        `}
+      </div>
+
+      <div class="footer">
+        <p style="margin: 0 0 4px 0;">
+          This is an automated report from <a href="#">BCC Student Portal</a>
+        </p>
+        <p style="margin: 0; font-size: 12px; color: #9ca3af;">
+          Generated on ${new Date().toLocaleString()}
+        </p>
       </div>
     </div>
-  );
+  </body>
+  </html>
+  `;
 }
 
-function EnrollmentCard({ enrollment, onViewGrades }) {
-  const title = formatEnrollmentTitle(enrollment.schoolYear, enrollment.semester);
-  const courseAndYear = formatCourseAndYear(enrollment.course, enrollment.yearLevel);
-  
-  return (
-    <div className="glass-card enrollment-card">
-      <div className="enrollment-meta">
-        <div className="enrollment-year">{title}</div>
-      </div>
-      {courseAndYear && (
-        <div className="enrollment-course">{courseAndYear}</div>
-      )}
-      <div className="enrollment-footer">
-        <span className="enrollment-id-label">ID {enrollment.enrollmentId}</span>
-        <button
-          className="btn-secondary"
-          onClick={() => onViewGrades(enrollment)}
-        >
-          View Grades
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-            <path d="M3 7h8M7 3l4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-        </button>
-      </div>
-    </div>
-  );
-}
+// ── Create Excel file from grades data ──────────────────────────────────────
 
-function EnrollmentsScreen({ data, onViewGrades, onBack }) {
-  const { studentId, studentName, enrollments } = data;
-  const displayName = formatStudentName(studentName) || studentId;
-  
-  // Get avatar letter from student name
-  const getAvatarLetter = () => {
-    if (studentName && studentName !== 'Student') {
-      if (studentName.includes(',')) {
-        const parts = studentName.split(',');
-        if (parts.length === 2) {
-          const firstName = parts[1].trim();
-          return firstName.charAt(0).toUpperCase();
+async function createGradesExcel(studentName, studentId, schoolYear, semester, course, yearLevel, grades, gwa, remarks) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'BCC Portal';
+  workbook.created = new Date();
+
+  const sheet = workbook.addWorksheet('Grades', {
+    properties: { tabColor: { argb: 'C9A84C' } },
+    pageSetup: { orientation: 'landscape', fitToPage: true }
+  });
+
+  // ── Header section ──────────────────────────────────────────────────────────
+  sheet.mergeCells('A1:G1');
+  const titleCell = sheet.getCell('A1');
+  titleCell.value = 'BUENAVISTA COMMUNITY COLLEGE';
+  titleCell.font = { size: 16, bold: true, color: { argb: '0A2414' } };
+  titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+
+  sheet.mergeCells('A2:G2');
+  const subCell = sheet.getCell('A2');
+  subCell.value = 'Official Grade Report';
+  subCell.font = { size: 12, italic: true, color: { argb: '6B7280' } };
+  subCell.alignment = { horizontal: 'center', vertical: 'middle' };
+
+  // ── Student info ────────────────────────────────────────────────────────────
+  const infoData = [
+    ['Student Name:', studentName || 'N/A', '', 'Student ID:', studentId || 'N/A'],
+    ['Course:', course || 'N/A', '', 'Year Level:', yearLevel || 'N/A'],
+    ['School Year:', schoolYear || 'N/A', '', 'Semester:', semester || 'N/A'],
+  ];
+
+  infoData.forEach((row, idx) => {
+    const rowNum = idx + 4;
+    sheet.getRow(rowNum).values = row;
+    sheet.getRow(rowNum).font = { size: 11 };
+    // Bold the labels
+    sheet.getCell(`A${rowNum}`).font = { bold: true, size: 11 };
+    sheet.getCell(`C${rowNum}`).font = { bold: true, size: 11 };
+  });
+
+  // ── GWA row ─────────────────────────────────────────────────────────────────
+  const gwaRow = 7;
+  sheet.mergeCells(`A${gwaRow}:E${gwaRow}`);
+  sheet.getCell(`A${gwaRow}`).value = `General Weighted Average: ${gwa || 'N/A'}`;
+  sheet.getCell(`A${gwaRow}`).font = { size: 12, bold: true };
+  sheet.getCell(`A${gwaRow}`).alignment = { horizontal: 'left' };
+
+  sheet.mergeCells(`F${gwaRow}:G${gwaRow}`);
+  sheet.getCell(`F${gwaRow}`).value = `Remarks: ${remarks || 'N/A'}`;
+  sheet.getCell(`F${gwaRow}`).font = { size: 12 };
+  sheet.getCell(`F${gwaRow}`).alignment = { horizontal: 'right' };
+
+  // ── Grades table ────────────────────────────────────────────────────────────
+  const headers = ['Subject Code', 'Description', 'Units', 'Midterm', 'Finals', 'Final Grade', 'Remarks'];
+  const headerRow = sheet.addRow(headers);
+  headerRow.font = { bold: true, size: 11, color: { argb: 'FFFFFF' } };
+  headerRow.fill = {
+    type: 'pattern',
+    pattern: 'solid',
+    fgColor: { argb: '0A2414' }
+  };
+  headerRow.alignment = { horizontal: 'center', vertical: 'middle' };
+  headerRow.height = 28;
+
+  // ── Add grade rows ─────────────────────────────────────────────────────────
+  if (grades && grades.length > 0) {
+    grades.forEach(g => {
+      const row = sheet.addRow([
+        g.subjectCode || '',
+        g.subjectTitle || '',
+        g.units || '',
+        g.midterm || '',
+        g.finals || '',
+        g.finalGrade || '',
+        g.remarks || 'N/A'
+      ]);
+      row.alignment = { vertical: 'middle' };
+      row.height = 24;
+      // Color the final grade based on value
+      const finalGrade = parseFloat(g.finalGrade);
+      if (!isNaN(finalGrade) && finalGrade > 0) {
+        const cell = row.getCell(6);
+        if (finalGrade <= 2.5) {
+          cell.font = { color: { argb: '008000' }, bold: true };
+        } else if (finalGrade <= 3.0) {
+          cell.font = { color: { argb: 'FF8C00' }, bold: true };
+        } else {
+          cell.font = { color: { argb: 'FF0000' }, bold: true };
         }
       }
-      return studentName.charAt(0).toUpperCase();
+      // Color remarks
+      const remarksCell = row.getCell(7);
+      if (g.remarks?.toLowerCase().includes('pass')) {
+        remarksCell.font = { color: { argb: '008000' }, bold: true };
+      } else if (g.remarks?.toLowerCase().includes('fail')) {
+        remarksCell.font = { color: { argb: 'FF0000' }, bold: true };
+      }
+    });
+  }
+
+  // ── Auto column widths ─────────────────────────────────────────────────────
+  sheet.getColumn(1).width = 18;
+  sheet.getColumn(2).width = 35;
+  sheet.getColumn(3).width = 10;
+  sheet.getColumn(4).width = 14;
+  sheet.getColumn(5).width = 14;
+  sheet.getColumn(6).width = 14;
+  sheet.getColumn(7).width = 16;
+
+  // ── Borders ─────────────────────────────────────────────────────────────────
+  const borderStyle = {
+    top: { style: 'thin', color: { argb: 'D1D5DB' } },
+    left: { style: 'thin', color: { argb: 'D1D5DB' } },
+    bottom: { style: 'thin', color: { argb: 'D1D5DB' } },
+    right: { style: 'thin', color: { argb: 'D1D5DB' } }
+  };
+
+  sheet.eachRow(row => {
+    row.eachCell(cell => {
+      cell.border = borderStyle;
+    });
+  });
+
+  // ── Footer ──────────────────────────────────────────────────────────────────
+  const footerRow = sheet.addRow([`Generated on ${new Date().toLocaleString()}`]);
+  footerRow.font = { size: 9, color: { argb: '9CA3AF' } };
+  sheet.mergeCells(`A${footerRow.number}:G${footerRow.number}`);
+  sheet.getCell(`A${footerRow.number}`).alignment = { horizontal: 'center' };
+
+  return workbook;
+}
+
+// ── Send grades email endpoint ──────────────────────────────────────────────
+
+app.post('/api/send-grades', async (req, res) => {
+  try {
+    const { email, enrollmentId, studentName, schoolYear, semester, course, yearLevel, grades, gwa, remarks } = req.body;
+
+    if (!email || !enrollmentId) {
+      return res.status(400).json({ error: 'Email and enrollment ID are required.' });
     }
-    return studentId.charAt(0).toUpperCase();
-  };
 
-  const avatarLetter = getAvatarLetter();
+    // ── Get student ID from enrollment ──────────────────────────────────────
+    // If studentId is not provided, we can fetch it from the enrollment data
+    // For now, we'll use what's available
 
-  return (
-    <div className="screen enrollments-screen">
-      <div className="top-bar">
-        <button className="back-btn" onClick={onBack} aria-label="Back">
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-            <path d="M12 4l-6 6 6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-        </button>
-        <span className="top-bar-title">BCC Portal</span>
-        <div style={{width: 40}} />
-      </div>
+    const studentId = req.body.studentId || 'N/A';
 
-      <div className="screen-content">
-        <div className="student-header">
-          <div className="student-avatar">
-            {avatarLetter}
-          </div>
-          <div className="student-info">
-            <div className="student-name">{displayName}</div>
-            <div className="student-id">{studentId}</div>
-          </div>
-        </div>
+    // ── Create Excel file ────────────────────────────────────────────────────
+    const workbook = await createGradesExcel(
+      studentName || 'Student',
+      studentId,
+      schoolYear || 'N/A',
+      semester || 'N/A',
+      course || 'N/A',
+      yearLevel || 'N/A',
+      grades || [],
+      gwa || 'N/A',
+      remarks || 'N/A'
+    );
 
-        <div className="section-label">{enrollments.length} enrollment{enrollments.length !== 1 ? 's' : ''} found</div>
+    const excelBuffer = await workbook.xlsx.writeBuffer();
 
-        <div className="enrollments-list">
-          {enrollments.map(e => (
-            <EnrollmentCard
-              key={e.enrollmentId}
-              enrollment={e}
-              onViewGrades={onViewGrades}
-            />
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
+    // ── Generate HTML email ──────────────────────────────────────────────────
+    const htmlContent = generateGradeEmailHTML(
+      studentName || 'Student',
+      studentId,
+      schoolYear || 'N/A',
+      semesterLabel(semester) || semester || 'N/A',
+      course || 'N/A',
+      yearLevel || 'N/A',
+      grades || [],
+      gwa || 'N/A',
+      remarks || 'N/A'
+    );
 
-function GradesScreen({ enrollment, studentName, onBack }) {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+    // ── Send email ──────────────────────────────────────────────────────────
+    const mailOptions = {
+      from: process.env.EMAIL_USER || 'your-email@gmail.com',
+      to: email,
+      subject: `📘 Grade Report - ${studentName || 'Student'} (${schoolYear || ''} ${semester || ''})`,
+      html: htmlContent,
+      attachments: [{
+        filename: `Grades_${studentName?.replace(/\s/g, '_') || 'Student'}_${schoolYear || ''}_${semester || ''}.xlsx`,
+        content: excelBuffer,
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      }]
+    };
 
-  React.useEffect(() => {
-    setLoading(true);
-    setError('');
-    fetch(`${API}/api/grades/${enrollment.enrollmentId}`)
-      .then(r => r.json())
-      .then(d => {
-        if (d.error) throw new Error(d.error);
-        setData(d);
-      })
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false));
-  }, [enrollment.enrollmentId]);
+    await transporter.sendMail(mailOptions);
 
-  const getStudentInfoLine = () => {
-    const parts = [];
-    
-    let name = data?.studentInfo?.name || studentName || '';
-    if (name) {
-      name = formatStudentName(name);
-    }
-    
-    const course = data?.studentInfo?.course || enrollment.course || '';
-    const schoolYear = enrollment.schoolYear || '';
-    const semester = semesterLabel(enrollment.semester) || enrollment.semester || '';
+    res.json({ success: true, message: 'Email sent successfully!' });
 
-    if (name) parts.push(name);
-    if (course) parts.push(course);
-    if (schoolYear && schoolYear !== 'N/A') parts.push(schoolYear);
-    if (semester) parts.push(semester);
-
-    return parts.length > 0 ? parts.join(' | ') : 'Student Grades';
-  };
-
-  return (
-    <div className="screen grades-screen">
-      <div className="top-bar">
-        <button className="back-btn" onClick={onBack} aria-label="Back">
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-            <path d="M12 4l-6 6 6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-        </button>
-        <span className="top-bar-title">BCC Portal</span>
-        <div style={{width: 40}} />
-      </div>
-
-      <div className="screen-content">
-        <div className="grades-header glass-card">
-          <div className="grades-meta-row">
-            <div>
-              <div className="grades-period" style={{ fontSize: '16px', fontWeight: '600' }}>
-                {getStudentInfoLine()}
-              </div>
-            </div>
-            <div className="enrollment-id-chip">ID {enrollment.enrollmentId}</div>
-          </div>
-        </div>
-
-        {loading && (
-          <div className="loading-state">
-            <Spinner />
-            <span>Loading grades</span>
-          </div>
-        )}
-
-        {error && <ErrorBanner message={error} onDismiss={() => setError('')} />}
-
-        {data && !loading && (
-          <>
-            {data.gwa && (
-              <div className="gwa-card glass-card">
-                <span className="gwa-label">General Weighted Average</span>
-                <span className="gwa-value" style={{ color: gradeColor(data.gwa) }}>
-                  {data.gwa}
-                </span>
-                {data.remarks && (
-                  <span className={`gwa-remarks ${data.remarks.toLowerCase().includes('pass') ? 'passed' : 'failed'}`}>
-                    {data.remarks}
-                  </span>
-                )}
-              </div>
-            )}
-
-            {data.grades && data.grades.length > 0 ? (
-              <div className="grades-list">
-                <div className="section-label">Subjects</div>
-                {data.grades.map((g, i) => (
-                  <div className="glass-card grade-row" key={i}>
-                    <div className="grade-subject">
-                      <span className="grade-code">{g.subjectCode}</span>
-                      {g.subjectTitle && (
-                        <span className="grade-title">{g.subjectTitle}</span>
-                      )}
-                    </div>
-                    <div className="grade-scores">
-                      {g.units && (
-                        <div className="grade-stat">
-                          <span className="grade-stat-label">Units</span>
-                          <span className="grade-stat-value">{g.units}</span>
-                        </div>
-                      )}
-                      {g.midterm && (
-                        <div className="grade-stat">
-                          <span className="grade-stat-label">Midterm</span>
-                          <span className="grade-stat-value" style={{ color: gradeColor(g.midterm) }}>
-                            {g.midterm}
-                          </span>
-                        </div>
-                      )}
-                      {g.finals && (
-                        <div className="grade-stat">
-                          <span className="grade-stat-label">Finals</span>
-                          <span className="grade-stat-value" style={{ color: gradeColor(g.finals) }}>
-                            {g.finals}
-                          </span>
-                        </div>
-                      )}
-                      {g.finalGrade && (
-                        <div className="grade-stat final">
-                          <span className="grade-stat-label">Final</span>
-                          <span className="grade-stat-value" style={{ color: gradeColor(g.finalGrade) }}>
-                            {g.finalGrade}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                    {g.remarks && (
-                      <div className={`grade-remark ${g.remarks.toLowerCase().includes('pass') ? 'passed' : g.remarks.toLowerCase().includes('fail') ? 'failed' : ''}`}>
-                        {g.remarks}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="empty-state glass-card">
-                <div className="empty-icon">
-                  <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-                    <rect x="6" y="4" width="20" height="24" rx="3" stroke="currentColor" strokeWidth="1.5"/>
-                    <path d="M11 11h10M11 16h10M11 21h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                  </svg>
-                </div>
-                <p className="empty-text">Grade details are not available for this enrollment. The portal may require authentication to display them.</p>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── App ───────────────────────────────────────────────────────────────────────
-
-export default function App() {
-  const [screen, setScreen] = useState('lookup');
-  const [enrollmentData, setEnrollmentData] = useState(null);
-  const [selectedEnrollment, setSelectedEnrollment] = useState(null);
-
-  const handleResult = (data) => {
-    setEnrollmentData(data);
-    setScreen('enrollments');
-  };
-
-  const handleViewGrades = (enrollment) => {
-    setSelectedEnrollment(enrollment);
-    setScreen('grades');
-  };
-
-  return (
-    <div className="app">
-      <div className="bg-gradient" />
-      <div className="bg-mesh" />
-
-      {screen === 'lookup' && (
-        <LookupScreen onResult={handleResult} />
-      )}
-      {screen === 'enrollments' && enrollmentData && (
-        <EnrollmentsScreen
-          data={enrollmentData}
-          onViewGrades={handleViewGrades}
-          onBack={() => setScreen('lookup')}
-        />
-      )}
-      {screen === 'grades' && selectedEnrollment && (
-        <GradesScreen
-          enrollment={selectedEnrollment}
-          studentName={enrollmentData?.studentName}
-          onBack={() => setScreen('enrollments')}
-        />
-      )}
-    </div>
-  );
-}
+  } catch (err) {
+    console.error('Send email error:', err);
+    res.status(500).json({ error: err.message || 'Failed to send email.' });
+  }
+});
