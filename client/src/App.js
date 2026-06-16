@@ -255,7 +255,7 @@ function GradesScreen({ enrollment, studentName, onBack }) {
     // Get course from API or enrollment
     const course = data?.studentInfo?.course || enrollment.course || '';
     
-    // Get school year and semester from enrollment
+    // Get school year and semester from enrollment ONLY
     const schoolYear = enrollment.schoolYear || '';
     const semester = semesterLabel(enrollment.semester) || enrollment.semester || '';
 
