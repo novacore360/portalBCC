@@ -23,7 +23,6 @@ function semesterLabel(sem) {
   return sem;
 }
 
-// Format enrollment title: "2024-2025 | 1st Semester"
 function formatEnrollmentTitle(schoolYear, semester) {
   const sem = semesterLabel(semester) || semester;
   if (schoolYear && schoolYear !== 'N/A' && sem) {
@@ -32,7 +31,6 @@ function formatEnrollmentTitle(schoolYear, semester) {
   return schoolYear || sem || 'N/A';
 }
 
-// Format student name from "Last, First Middle" to "First Middle Last"
 function formatStudentName(name) {
   if (!name) return '';
   if (name.includes(',')) {
@@ -44,6 +42,14 @@ function formatStudentName(name) {
     }
   }
   return name;
+}
+
+// Format course and year level: "BSIT | 1st Year"
+function formatCourseAndYear(course, yearLevel) {
+  const parts = [];
+  if (course) parts.push(course);
+  if (yearLevel) parts.push(yearLevel);
+  return parts.length > 0 ? parts.join(' | ') : '';
 }
 
 // ── Components ────────────────────────────────────────────────────────────────
@@ -151,17 +157,15 @@ function LookupScreen({ onResult }) {
 
 function EnrollmentCard({ enrollment, onViewGrades }) {
   const title = formatEnrollmentTitle(enrollment.schoolYear, enrollment.semester);
+  const courseAndYear = formatCourseAndYear(enrollment.course, enrollment.yearLevel);
   
   return (
     <div className="glass-card enrollment-card">
       <div className="enrollment-meta">
         <div className="enrollment-year">{title}</div>
       </div>
-      {enrollment.yearLevel && (
-        <div className="enrollment-detail">{enrollment.yearLevel}</div>
-      )}
-      {enrollment.course && (
-        <div className="enrollment-course">{enrollment.course}</div>
+      {courseAndYear && (
+        <div className="enrollment-course">{courseAndYear}</div>
       )}
       <div className="enrollment-footer">
         <span className="enrollment-id-label">ID {enrollment.enrollmentId}</span>
@@ -182,6 +186,11 @@ function EnrollmentCard({ enrollment, onViewGrades }) {
 function EnrollmentsScreen({ data, onViewGrades, onBack }) {
   const { studentId, studentName, enrollments } = data;
   const displayName = formatStudentName(studentName) || studentId;
+  
+  // Get the course from the first enrollment (all enrollments should have same course)
+  const course = enrollments.length > 0 ? enrollments[0].course : '';
+  // Get the first letter of the course for the avatar
+  const avatarLetter = course ? course.charAt(0).toUpperCase() : (studentName || studentId).charAt(0).toUpperCase();
 
   return (
     <div className="screen enrollments-screen">
@@ -191,14 +200,16 @@ function EnrollmentsScreen({ data, onViewGrades, onBack }) {
             <path d="M12 4l-6 6 6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
         </button>
-        <span className="top-bar-title">Enrollments</span>
+        {/* Top bar shows only "BCC Portal" without student name */}
+        <span className="top-bar-title">BCC Portal</span>
         <div style={{width: 40}} />
       </div>
 
       <div className="screen-content">
         <div className="student-header">
+          {/* Avatar shows course initial instead of student name initial */}
           <div className="student-avatar">
-            {(studentName || studentId).charAt(0).toUpperCase()}
+            {avatarLetter}
           </div>
           <div className="student-info">
             {studentName && <div className="student-name">{displayName}</div>}
@@ -227,22 +238,12 @@ function GradesScreen({ enrollment, studentName, onBack }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // Debug: Log the enrollment data to see what's being passed
-  console.log('📝 Enrollment data in GradesScreen:', {
-    schoolYear: enrollment.schoolYear,
-    semester: enrollment.semester,
-    course: enrollment.course,
-    enrollmentId: enrollment.enrollmentId,
-    yearLevel: enrollment.yearLevel
-  });
-
   React.useEffect(() => {
     setLoading(true);
     setError('');
     fetch(`${API}/api/grades/${enrollment.enrollmentId}`)
       .then(r => r.json())
       .then(d => {
-        console.log('📊 Grades API response:', d);
         if (d.error) throw new Error(d.error);
         setData(d);
       })
@@ -250,29 +251,18 @@ function GradesScreen({ enrollment, studentName, onBack }) {
       .finally(() => setLoading(false));
   }, [enrollment.enrollmentId]);
 
-  // ── Get student info line ──────────────────────────────────────────────────
   const getStudentInfoLine = () => {
     const parts = [];
     
-    // Get name from API response or props
     let name = data?.studentInfo?.name || studentName || '';
-    
-    // Format name from "Last, First" to "First Last"
     if (name) {
       name = formatStudentName(name);
     }
     
-    // Get course from API or enrollment
     const course = data?.studentInfo?.course || enrollment.course || '';
-    
-    // ✅ FIX: Get school year and semester from enrollment ONLY
-    // Don't fall back to studentId or any other value
     const schoolYear = enrollment.schoolYear || '';
     const semester = semesterLabel(enrollment.semester) || enrollment.semester || '';
 
-    console.log('📌 Building info line:', { name, course, schoolYear, semester });
-
-    // Build the parts array - only add if they exist and are not 'N/A'
     if (name) parts.push(name);
     if (course) parts.push(course);
     if (schoolYear && schoolYear !== 'N/A') parts.push(schoolYear);
@@ -289,7 +279,7 @@ function GradesScreen({ enrollment, studentName, onBack }) {
             <path d="M12 4l-6 6 6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
         </button>
-        <span className="top-bar-title">Grades</span>
+        <span className="top-bar-title">BCC Portal</span>
         <div style={{width: 40}} />
       </div>
 
@@ -402,7 +392,7 @@ function GradesScreen({ enrollment, studentName, onBack }) {
 // ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [screen, setScreen] = useState('lookup'); // lookup | enrollments | grades
+  const [screen, setScreen] = useState('lookup');
   const [enrollmentData, setEnrollmentData] = useState(null);
   const [selectedEnrollment, setSelectedEnrollment] = useState(null);
 
