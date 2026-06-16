@@ -30,6 +30,18 @@ const httpClient = axios.create({
   }
 });
 
+// API client for JSON requests
+const apiClient = axios.create({
+  timeout: 20000,
+  withCredentials: true,
+  headers: {
+    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+    'Accept': 'application/json, text/plain, */*',
+    'X-Requested-With': 'XMLHttpRequest',
+    'Referer': BASE_URL + '/',
+  }
+});
+
 // Cookie jar (shared per process — good enough for a personal-use tool)
 let sessionCookies = '';
 
@@ -38,6 +50,24 @@ async function fetchPage(url) {
   if (sessionCookies) headers['Cookie'] = sessionCookies;
 
   const response = await httpClient.get(url, { headers });
+
+  // Capture any set-cookie headers
+  const setCookie = response.headers['set-cookie'];
+  if (setCookie) {
+    const newCookies = setCookie
+      .map(c => c.split(';')[0])
+      .join('; ');
+    sessionCookies = newCookies;
+  }
+
+  return response.data;
+}
+
+async function fetchAPI(url) {
+  const headers = {};
+  if (sessionCookies) headers['Cookie'] = sessionCookies;
+
+  const response = await apiClient.get(url, { headers });
 
   // Capture any set-cookie headers
   const setCookie = response.headers['set-cookie'];
@@ -202,180 +232,211 @@ app.get('/api/grades/:enrollmentId', async (req, res) => {
   const { enrollmentId } = req.params;
 
   try {
-    const url = `${BASE_URL}/students/viewGradesStudent/${enrollmentId}/`;
-    const html = await fetchPage(url);
+    // ── Step 1: Fetch the grades page to extract Vue.js variables ──────────
+    const pageUrl = `${BASE_URL}/students/viewGradesStudent/${enrollmentId}/`;
+    const html = await fetchPage(pageUrl);
 
     if (isLoginPage(html)) {
       return res.status(401).json({
-        error: 'The portal requires a login session to view grade details. Try refreshing the enrollment list first.'
+        error: 'The portal requires a login session to view grade details.'
       });
     }
 
-    const $ = cheerio.load(html);
+    // ── Step 2: Extract Vue.js variables from the page ─────────────────────
+    // These are the keys we need to call the internal API
+    let studentPk = '';
+    let ayId = '';
+    let sem = '';
 
-    const grades = [];
-    let gwa = '';
-    let remarks = '';
-    let studentInfo = {};
-
-    // ── Extract student info from definition lists or header tables ──────────
-    // Pattern 1: label/value pairs in any table
-    $('table').each((_, table) => {
-      $(table).find('tr').each((_, row) => {
-        const tds = $(row).find('td, th');
-        if (tds.length >= 2) {
-          const label = $(tds[0]).text().trim().toLowerCase();
-          const value = $(tds[1]).text().trim();
-          if (!value) return;
-          if (/name/.test(label) && !studentInfo.name) studentInfo.name = value;
-          if (/(course|program|degree)/.test(label) && !studentInfo.course) studentInfo.course = value;
-          if (/year.level/.test(label) && !studentInfo.yearLevel) studentInfo.yearLevel = value;
-          if (/semester/.test(label) && !studentInfo.semester) studentInfo.semester = value;
-          if (/school.year/.test(label) && !studentInfo.schoolYear) studentInfo.schoolYear = value;
-        }
-      });
-    });
-
-    // Pattern 2: dl/dt/dd
-    $('dl').each((_, dl) => {
-      $(dl).find('dt').each((_, dt) => {
-        const label = $(dt).text().trim().toLowerCase();
-        const value = $(dt).next('dd').text().trim();
-        if (/name/.test(label) && !studentInfo.name) studentInfo.name = value;
-        if (/(course|program)/.test(label) && !studentInfo.course) studentInfo.course = value;
-      });
-    });
-
-    // Pattern 3: scan paragraphs/spans for name-like text
-    if (!studentInfo.name) {
-      $('h1, h2, h3, h4, p, .student-name, [class*="name"]').each((_, el) => {
-        if (studentInfo.name) return;
-        const txt = $(el).text().trim();
-        if (/^[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,4}$/.test(txt) && txt.length < 80) {
-          studentInfo.name = txt;
-        }
-        if (!studentInfo.name && /^[A-Z]+,\s+[A-Z]+/.test(txt) && txt.length < 80) {
-          studentInfo.name = txt;
-        }
-      });
+    // Method 1: Look for var declarations in script tags
+    const scriptMatches = html.match(/<script[^>]*>([\s\S]*?)<\/script>/g);
+    if (scriptMatches) {
+      for (const script of scriptMatches) {
+        // Look for var student_pk = '12515'
+        const pkMatch = script.match(/var\s+student_pk\s*=\s*['"]([^'"]+)['"]/);
+        if (pkMatch) studentPk = pkMatch[1];
+        
+        // Look for var ay = '9'
+        const ayMatch = script.match(/var\s+ay\s*=\s*['"]([^'"]+)['"]/);
+        if (ayMatch) ayId = ayMatch[1];
+        
+        // Look for var sem = '1st'
+        const semMatch = script.match(/var\s+sem\s*=\s*['"]([^'"]+)['"]/);
+        if (semMatch) sem = semMatch[1];
+        
+        if (studentPk && ayId && sem) break;
+      }
     }
 
-    // ── Extract grade rows ────────────────────────────────────────────────────
-    // Find the grades table — look for a table with subject-code-like content
-    $('table').each((_, table) => {
-      const $table = $(table);
-      const headerText = $table.find('thead, tr').first().text().toLowerCase();
+    // Method 2: Look for the data in the Vue.js created() method
+    if (!studentPk || !ayId || !sem) {
+      const vueCreatedMatch = html.match(/axios\.get\([`'"]\/Api\/enrollbystudsub\/(\d+)\/(\d+)\/([^'"`]+)[`'"]/);
+      if (vueCreatedMatch) {
+        studentPk = vueCreatedMatch[1];
+        ayId = vueCreatedMatch[2];
+        sem = vueCreatedMatch[3];
+      }
+    }
 
-      // Skip info tables (usually short, contain "name", "course")
-      const isMeta = /name|student|course|program|year level|school year/i.test(headerText) &&
-        $table.find('tr').length < 6;
-      if (isMeta) return;
-
-      $table.find('tbody tr, tr').each((_, row) => {
-        const cells = $(row).find('td').map((_, td) => $(td).text().trim()).get();
-        if (cells.length < 2) return;
-
-        const rowText = cells.join(' ').toLowerCase();
-
-        // Detect GWA row
-        if (/gwa|general weighted|weighted average/.test(rowText)) {
-          const numMatch = cells.join(' ').match(/\b\d\.\d{2,4}\b/);
-          if (numMatch) gwa = numMatch[0];
-          const remarkMatch = cells.find(c => /passed|failed|incomplete/i.test(c));
-          if (remarkMatch) remarks = remarkMatch;
-          return;
-        }
-
-        // Skip header rows
-        if (/subject|description|units|midterm|final|grade|remarks/i.test(cells[0])) return;
-
-        // Detect subject rows
-        // Cell[0] looks like a subject code: "BEED 101", "NSTP 1", "ENG101", etc.
-        const looksLikeSubject =
-          /^[A-Z]{2,}[\s\-]?\d/.test(cells[0]) ||   // "BEED 101", "CS101"
-          /^[A-Z]{3,}\d/.test(cells[0]) ||            // "MATH1"
-          (/^[A-Z]/.test(cells[0]) && cells[0].length < 25 && cells.length >= 4);
-
-        if (looksLikeSubject && cells[0]) {
-          // Column mapping: try to detect dynamically
-          // Typical: Code | Description | Units | Midterm | Final | Final Grade | Remarks
-          // Some portals: Code | Description | Units | Grade | Remarks
-          const entry = {
-            subjectCode: cells[0] || '',
-            subjectTitle: cells[1] || '',
-            units: '',
-            midterm: '',
-            finals: '',
-            finalGrade: '',
-            remarks: ''
-          };
-
-          // Assign numeric columns
-          const numericCols = cells.slice(2).map((c, i) => ({
-            index: i + 2,
-            value: c,
-            isNum: /^\d+(\.\d+)?$/.test(c.trim()),
-            isRemark: /passed|failed|incomplete|inc\.|drp|dropped|w\/d/i.test(c),
+    // ── Step 3: If we found the variables, call the internal API ───────────
+    if (studentPk && ayId && sem) {
+      console.log(`📡 Calling API: student_pk=${studentPk}, ay=${ayId}, sem=${sem}`);
+      
+      const apiUrl = `${BASE_URL}/Api/enrollbystudsub/${studentPk}/${ayId}/${sem}`;
+      
+      try {
+        const data = await fetchAPI(apiUrl);
+        
+        if (data && data.length > 0) {
+          // ── Transform API response to match frontend expectations ──────
+          const grades = data.map(el => ({
+            subjectCode: el.subject?.code || '',
+            subjectTitle: el.subject?.description || '',
+            units: el.subject?.unit?.toString() || '',
+            midterm: el.midterm_grade?.toString() || '',
+            finalGrade: el.grade?.toString() || '',
+            remarks: el.grade_status || 'N/A',
+            status: el.grade_status || 'N/A'
           }));
 
-          const nums = numericCols.filter(c => c.isNum);
-          const remarkCol = numericCols.find(c => c.isRemark);
+          // ── Calculate GWA ──────────────────────────────────────────────
+          let totalUnits = 0;
+          let totalGradePoints = 0;
+          let passedCount = 0;
 
-          if (nums.length === 1) {
-            entry.finalGrade = nums[0].value;
-          } else if (nums.length === 2) {
-            // units + final grade  OR  midterm + final
-            if (parseFloat(nums[0].value) <= 6) {
-              entry.units = nums[0].value;
-              entry.finalGrade = nums[1].value;
-            } else {
-              entry.midterm = nums[0].value;
-              entry.finalGrade = nums[1].value;
+          grades.forEach(g => {
+            const grade = parseFloat(g.finalGrade);
+            const units = parseFloat(g.units) || 0;
+            if (grade > 0 && units > 0 && g.remarks?.toLowerCase() === 'passed') {
+              totalUnits += units;
+              totalGradePoints += grade * units;
+              passedCount++;
             }
-          } else if (nums.length === 3) {
-            entry.units = nums[0].value;
-            entry.midterm = nums[1].value;
-            entry.finalGrade = nums[2].value;
-          } else if (nums.length >= 4) {
-            entry.units = nums[0].value;
-            entry.midterm = nums[1].value;
-            entry.finals = nums[2].value;
-            entry.finalGrade = nums[3].value;
-          }
+          });
 
-          if (remarkCol) entry.remarks = remarkCol.value;
+          const gwa = totalUnits > 0 ? (totalGradePoints / totalUnits).toFixed(2) : 'N/A';
+          const remarks = totalUnits > 0 ? 'Passed' : 'No grades available';
 
-          // fallback: last non-numeric cell if still no grade
-          if (!entry.finalGrade) {
-            const last = cells[cells.length - 1];
-            if (/\d/.test(last)) entry.finalGrade = last;
-          }
+          // ── Extract student info ────────────────────────────────────────
+          const studentInfo = {
+            name: data[0]?.enrolled_by_student?.student?.last_name 
+              ? `${data[0].enrolled_by_student.student.last_name}, ${data[0].enrolled_by_student.student.first_name}`
+              : '',
+            course: data[0]?.enrolled_by_student?.course?.code || '',
+            yearLevel: data[0]?.enrolled_by_student?.year_level?.description || '',
+            studentId: data[0]?.enrolled_by_student?.student?.student_id || '',
+          };
 
-          grades.push(entry);
+          return res.json({
+            enrollmentId,
+            studentInfo,
+            grades,
+            gwa,
+            remarks,
+            source: 'api',
+            _debug: { studentPk, ayId, sem }
+          });
         }
-      });
+      } catch (apiError) {
+        console.error('API fetch error:', apiError.message);
+        // Fall through to static HTML parsing
+      }
+    }
+
+    // ── Step 4: Fallback to static HTML parsing if API fails ──────────────
+    console.log('⚠️ API method failed, falling back to static HTML parsing...');
+    
+    const $ = cheerio.load(html);
+    const grades = [];
+    let studentInfo = {};
+
+    // Look for the grades table
+    $('table').each((_, table) => {
+      const $table = $(table);
+      const headerText = $table.find('tr').first().text().trim();
+      
+      // Check if this is the grades table (contains Student id and Fullname)
+      if (headerText.includes('Student id') && headerText.includes('Fullname')) {
+        $table.find('tr').each((_, row) => {
+          const cells = $(row).find('td').map((_, td) => $(td).text().trim()).get();
+          
+          // Skip header row
+          if (cells[0] === 'Student id' || cells[0] === 'Fullname') return;
+          
+          // Skip empty rows
+          if (cells.length < 4) return;
+          
+          // Check if this is a valid subject row
+          if (cells[2] && /^[A-Z]{2,}[\s\-]?\d/.test(cells[2])) {
+            grades.push({
+              studentId: cells[0] || '',
+              studentName: cells[1] || '',
+              subjectCode: cells[2] || '',
+              subjectTitle: cells[3] || '',
+              midterm: cells[4] || '',
+              finalGrade: cells[5] || '',
+              units: cells[6] || '',
+              remarks: cells[7] || '',
+              status: cells[7] || ''
+            });
+            
+            // Extract student info from first row
+            if (grades.length === 1) {
+              studentInfo = {
+                name: cells[1] || '',
+                studentId: cells[0] || '',
+                course: '',
+                yearLevel: ''
+              };
+            }
+          }
+        });
+        return false; // Stop iterating tables
+      }
     });
 
-    // Deduplicate by subjectCode
-    const seen = new Set();
-    const uniqueGrades = grades.filter(g => {
-      if (seen.has(g.subjectCode)) return false;
-      seen.add(g.subjectCode);
-      return true;
+    if (grades.length === 0) {
+      return res.status(404).json({
+        error: 'No grades found. The portal may have changed its structure.',
+        _debug: { htmlLength: html.length, hasVueVars: !!(studentPk && ayId && sem) }
+      });
+    }
+
+    // ── Calculate GWA from static table ──────────────────────────────────
+    let totalUnits = 0;
+    let totalGradePoints = 0;
+
+    grades.forEach(g => {
+      const grade = parseFloat(g.finalGrade);
+      const units = parseFloat(g.units) || 0;
+      if (grade > 0 && units > 0 && g.remarks?.toLowerCase() === 'passed') {
+        totalUnits += units;
+        totalGradePoints += grade * units;
+      }
     });
+
+    const gwa = totalUnits > 0 ? (totalGradePoints / totalUnits).toFixed(2) : 'N/A';
+    const remarks = totalUnits > 0 ? 'Passed' : 'No grades available';
 
     res.json({
       enrollmentId,
       studentInfo,
-      grades: uniqueGrades,
+      grades,
       gwa,
       remarks,
-      rawAvailable: uniqueGrades.length > 0
+      source: 'static_html'
     });
 
   } catch (err) {
     console.error('Grades fetch error:', err.message);
-    res.status(500).json({ error: 'Could not fetch grades. Try again later.' });
+    if (err.response) {
+      console.error('Response status:', err.response.status);
+      console.error('Response data:', err.response.data);
+    }
+    res.status(500).json({ 
+      error: 'Could not fetch grades. Try again later.',
+      details: err.message 
+    });
   }
 });
 
