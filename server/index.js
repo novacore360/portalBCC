@@ -51,7 +51,6 @@ async function fetchPage(url) {
 
   const response = await httpClient.get(url, { headers });
 
-  // Capture any set-cookie headers
   const setCookie = response.headers['set-cookie'];
   if (setCookie) {
     const newCookies = setCookie
@@ -69,7 +68,6 @@ async function fetchAPI(url) {
 
   const response = await apiClient.get(url, { headers });
 
-  // Capture any set-cookie headers
   const setCookie = response.headers['set-cookie'];
   if (setCookie) {
     const newCookies = setCookie
@@ -81,7 +79,6 @@ async function fetchAPI(url) {
   return response.data;
 }
 
-// Detect if we landed on a login page
 function isLoginPage(html) {
   const lower = html.toLowerCase();
   return (
@@ -91,13 +88,54 @@ function isLoginPage(html) {
   );
 }
 
+// ── Extract student name from view grades page ──────────────────────────────
+function extractStudentNameFromGradesPage(html) {
+  const $ = cheerio.load(html);
+  
+  // Try to find the student name in the Vue.js data
+  // Look for: var student_pk = '12515' and then get name from API response
+  
+  // Method 1: Look for the name in the Vue.js created() method or data
+  const scriptMatches = html.match(/<script[^>]*>([\s\S]*?)<\/script>/g);
+  if (scriptMatches) {
+    for (const script of scriptMatches) {
+      // Look for fullname pattern in the Vue data
+      const nameMatch = script.match(/fullname["']?\s*:\s*["']([^"']+)["']/);
+      if (nameMatch) {
+        return nameMatch[1];
+      }
+      // Look for student name in the API URL pattern
+      const apiMatch = script.match(/\/Api\/enrollbystudsub\/\d+\/\d+\/([^'"`]+)/);
+      if (apiMatch) {
+        // The semester is captured, but we need the name from the page
+        // Keep looking
+      }
+    }
+  }
+  
+  // Method 2: Look for the name in the table data (first row)
+  $('table').each((_, table) => {
+    const $table = $(table);
+    const headerText = $table.find('tr').first().text().trim();
+    
+    if (headerText.includes('Student id') && headerText.includes('Fullname')) {
+      const firstRow = $table.find('tr').eq(1);
+      const cells = firstRow.find('td').map((_, td) => $(td).text().trim()).get();
+      if (cells.length >= 2 && cells[1]) {
+        return cells[1]; // Fullname column
+      }
+    }
+  });
+  
+  return '';
+}
+
 // ── Enrollment scraper ────────────────────────────────────────────────────────
 
 app.get('/api/enrollments/:studentId', async (req, res) => {
   const { studentId } = req.params;
 
   try {
-    // Remove any trailing characters
     const cleanStudentId = studentId.trim();
     const url = `${BASE_URL}/students/enroll/student/${encodeURIComponent(cleanStudentId)}/`;
     console.log(`📡 Fetching: ${url}`);
@@ -110,77 +148,39 @@ app.get('/api/enrollments/:studentId', async (req, res) => {
 
     const $ = cheerio.load(html);
 
-    // ── Extract full student name ────────────────────────────────────────────
-    let studentName = '';
-
-    const nameCandidates = [
-      $('h1').first().text().trim(),
-      $('h2').first().text().trim(),
-      $('h3').first().text().trim(),
-      $('.student-name').first().text().trim(),
-      $('[class*="name"]').first().text().trim(),
-      $('td:contains("Name")').next('td').text().trim(),
-      $('td:contains("Student Name")').next('td').text().trim(),
-      $('th:contains("Name")').next('th').text().trim(),
-    ];
-
-    for (const candidate of nameCandidates) {
-      if (candidate && candidate.length > 3 && candidate.length < 100 &&
-          !/dashboard|portal|enrollment|subject|grade/i.test(candidate)) {
-        studentName = candidate;
-        break;
-      }
-    }
-
-    if (!studentName) {
-      $('p, span, div, td, li').each((_, el) => {
-        if (studentName) return;
-        const el$ = $(el);
-        if (el$.children().length > 0) return;
-        const txt = el$.text().trim();
-        if (/^[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,4}$/.test(txt)) {
-          studentName = txt;
-        }
-        if (!studentName && /^[A-Z]+,\s+[A-Z]+/.test(txt) && txt.length < 60) {
-          studentName = txt;
-        }
-      });
-    }
-
-    // ── Extract enrollments ───────────────────────────────────────────────────
+    // ── Extract enrollments first ────────────────────────────────────────────
     const enrollments = [];
     const seenEnrollmentIds = new Set();
 
-    $('a[href*="viewGradesStudent"]').each((_, el) => {
-      const href = $(el).attr('href') || '';
-      const match = href.match(/viewGradesStudent\/(\d+)/);
-      if (!match) return;
-
+    $('table tbody tr, table tr').each((_, row) => {
+      const $row = $(row);
+      const cells = $row.find('td').map((_, td) => $(td).text().trim()).get();
+      const rowText = $row.text().replace(/\s+/g, ' ').trim();
+      
+      const link = $row.find('a[href*="viewGradesStudent"]').attr('href') || '';
+      const match = link.match(/viewGradesStudent\/(\d+)/);
+      
+      if (!match || cells.length < 3) return;
+      
       const enrollmentId = match[1];
       if (seenEnrollmentIds.has(enrollmentId)) return;
       seenEnrollmentIds.add(enrollmentId);
 
-      const $row = $(el).closest('tr');
-      const cells = $row.find('td').map((_, td) => $(td).text().trim()).get();
-      const rowText = $row.text().replace(/\s+/g, ' ').trim();
-
       let schoolYear = '', semester = '', yearLevel = '', course = '';
 
-      // ── Extract School Year ──────────────────────────────────────────────
+      // Extract School Year
       const yearMatch = rowText.match(/\b(20\d{2}[-–]20\d{2})\b/);
       if (yearMatch) schoolYear = yearMatch[1];
 
-      // ── Extract Semester ──────────────────────────────────────────────────
+      // Extract Semester
       const semMatch = rowText.match(/\b(1st|2nd|3rd|Summer)\b/i);
       if (semMatch) semester = semMatch[1];
 
-      // ── Extract Year Level ───────────────────────────────────────────────
-      // Look for patterns like: "1st Year", "2nd Year", "3rd Year", "4th Year"
+      // Extract Year Level
       const yearLvlMatch = rowText.match(/\b(\d+(?:st|nd|rd|th)\s+Year)\b/i);
       if (yearLvlMatch) {
         yearLevel = yearLvlMatch[1];
       } else {
-        // Fallback: look for just the number with "Year"
         const yearNumMatch = rowText.match(/\b(\d+)\s+Year\b/i);
         if (yearNumMatch) {
           const num = parseInt(yearNumMatch[1]);
@@ -191,40 +191,20 @@ app.get('/api/enrollments/:studentId', async (req, res) => {
         }
       }
 
-      // ── Extract Course ────────────────────────────────────────────────────
-      const courseMatch = rowText.match(/\b(BSIT|BSCS|BEED|BSED|BSBA|BSTM|BSHM|AB|BS|BSCE|BSEE)\b/i);
-      if (courseMatch) course = courseMatch[0].toUpperCase();
+      // Extract Course
+      const courseRegex = /\b(BSIT|BSCS|BEED|BSED|BSBA|BSTM|BSHM|AB|BS|BSCE|BSEE|BSCrim|BSMath|BSSW|BSBio)\b/i;
+      const courseMatch = rowText.match(courseRegex);
+      if (courseMatch) {
+        course = courseMatch[0].toUpperCase();
+      }
 
       if (!course) {
-        cells.forEach(cell => {
-          if (/BSIT|BSCS|BEED|BSED|BSBA|BSTM|BSHM|AB|BS|BSCE|BSEE/i.test(cell)) {
-            course = cell.toUpperCase();
+        for (const cell of cells) {
+          const cellMatch = cell.match(courseRegex);
+          if (cellMatch) {
+            course = cellMatch[0].toUpperCase();
+            break;
           }
-        });
-      }
-
-      // ── Fallback: if still not found, try to extract from cell positions ──
-      if (!schoolYear && cells.length > 0) {
-        for (const cell of cells) {
-          const yMatch = cell.match(/\b(20\d{2}[-–]20\d{2})\b/);
-          if (yMatch) { schoolYear = yMatch[1]; break; }
-        }
-      }
-      
-      if (!semester && cells.length > 0) {
-        for (const cell of cells) {
-          if (/1st|2nd|Summer/i.test(cell)) { 
-            semester = cell.match(/\b(1st|2nd|Summer)\b/i)?.[0] || '';
-            break; 
-          }
-        }
-      }
-
-      // ── If year level still not found, check cells ──────────────────────
-      if (!yearLevel && cells.length > 0) {
-        for (const cell of cells) {
-          const ylMatch = cell.match(/\b(\d+(?:st|nd|rd|th)\s+Year)\b/i);
-          if (ylMatch) { yearLevel = ylMatch[1]; break; }
         }
       }
 
@@ -234,48 +214,9 @@ app.get('/api/enrollments/:studentId', async (req, res) => {
         semester: semester || 'N/A',
         yearLevel: yearLevel || '',
         course: course || '',
-        href
+        href: link
       });
     });
-
-    // Fallback: table rows without view grades links
-    if (enrollments.length === 0) {
-      $('table tbody tr').each((_, row) => {
-        const cells = $(row).find('td').map((_, td) => $(td).text().trim()).get();
-        const link = $(row).find('a[href*="viewGradesStudent"]').attr('href') || '';
-        const match = link.match(/viewGradesStudent\/(\d+)/);
-        if (match && cells.length > 0) {
-          const enrollmentId = match[1];
-          if (seenEnrollmentIds.has(enrollmentId)) return;
-          seenEnrollmentIds.add(enrollmentId);
-
-          let schoolYear = '', semester = '', yearLevel = '', course = '';
-          
-          for (const cell of cells) {
-            const yMatch = cell.match(/\b(20\d{2}[-–]20\d{2})\b/);
-            if (yMatch && !schoolYear) schoolYear = yMatch[1];
-            if (/1st|2nd|Summer/i.test(cell) && !semester) {
-              semester = cell.match(/\b(1st|2nd|Summer)\b/i)?.[0] || '';
-            }
-            if (/\b(BSIT|BSCS|BEED|BSED|BSBA|BSTM|BSHM|AB|BS|BSCE|BSEE)\b/i.test(cell) && !course) {
-              course = cell.toUpperCase();
-            }
-            if (/\b(\d+(?:st|nd|rd|th)\s+Year)\b/i.test(cell) && !yearLevel) {
-              yearLevel = cell;
-            }
-          }
-
-          enrollments.push({
-            enrollmentId,
-            schoolYear: schoolYear || 'N/A',
-            semester: semester || 'N/A',
-            yearLevel: yearLevel || '',
-            course: course || '',
-            href: link
-          });
-        }
-      });
-    }
 
     if (enrollments.length === 0) {
       return res.status(404).json({
@@ -283,7 +224,139 @@ app.get('/api/enrollments/:studentId', async (req, res) => {
       });
     }
 
-    res.json({ studentId: cleanStudentId, studentName, enrollments });
+    // ── Get student name from the first enrollment's view grades page ──────
+    let studentName = '';
+    
+    if (enrollments.length > 0) {
+      try {
+        const firstEnrollmentId = enrollments[0].enrollmentId;
+        const gradesUrl = `${BASE_URL}/students/viewGradesStudent/${firstEnrollmentId}/`;
+        console.log(`📡 Fetching grades page for name: ${gradesUrl}`);
+        
+        const gradesHtml = await fetchPage(gradesUrl);
+        
+        // Try to extract name from the grades page
+        const $grades = cheerio.load(gradesHtml);
+        
+        // Method 1: Look for the name in the table
+        $grades('table').each((_, table) => {
+          const $table = $(table);
+          const headerText = $table.find('tr').first().text().trim();
+          
+          if (headerText.includes('Student id') && headerText.includes('Fullname')) {
+            const firstRow = $table.find('tr').eq(1);
+            const cells = firstRow.find('td').map((_, td) => $(td).text().trim()).get();
+            if (cells.length >= 2 && cells[1]) {
+              studentName = cells[1];
+              return false;
+            }
+          }
+        });
+        
+        // Method 2: Look for Vue.js variables and then call the API
+        if (!studentName) {
+          const scriptMatches = gradesHtml.match(/<script[^>]*>([\s\S]*?)<\/script>/g);
+          if (scriptMatches) {
+            let studentPk = '', ayId = '', sem = '';
+            
+            for (const script of scriptMatches) {
+              const pkMatch = script.match(/var\s+student_pk\s*=\s*['"]([^'"]+)['"]/);
+              if (pkMatch) studentPk = pkMatch[1];
+              
+              const ayMatch = script.match(/var\s+ay\s*=\s*['"]([^'"]+)['"]/);
+              if (ayMatch) ayId = ayMatch[1];
+              
+              const semMatch = script.match(/var\s+sem\s*=\s*['"]([^'"]+)['"]/);
+              if (semMatch) sem = semMatch[1];
+              
+              if (studentPk && ayId && sem) break;
+            }
+            
+            if (studentPk && ayId && sem) {
+              const apiUrl = `${BASE_URL}/Api/enrollbystudsub/${studentPk}/${ayId}/${sem}`;
+              try {
+                const data = await fetchAPI(apiUrl);
+                if (data && data.length > 0) {
+                  const name = data[0]?.enrolled_by_student?.student?.last_name 
+                    ? `${data[0].enrolled_by_student.student.last_name}, ${data[0].enrolled_by_student.student.first_name}`
+                    : '';
+                  if (name) studentName = name;
+                }
+              } catch (apiError) {
+                console.error('API fetch for name error:', apiError.message);
+              }
+            }
+          }
+        }
+        
+        // Method 3: Look for name in h1/h2 tags
+        if (!studentName) {
+          const nameCandidates = [
+            $grades('h1').first().text().trim(),
+            $grades('h2').first().text().trim(),
+            $grades('h3').first().text().trim(),
+            $grades('.student-name').first().text().trim(),
+            $grades('[class*="name"]').first().text().trim(),
+          ];
+          
+          for (const candidate of nameCandidates) {
+            if (candidate && candidate.length > 3 && candidate.length < 100 &&
+                !/dashboard|portal|enrollment|subject|grade/i.test(candidate)) {
+              studentName = candidate;
+              break;
+            }
+          }
+        }
+        
+        console.log(`✅ Extracted student name: "${studentName}"`);
+        
+      } catch (error) {
+        console.error('Error fetching student name from grades page:', error.message);
+      }
+    }
+
+    // ── Fallback: try to get name from the enrollment page ─────────────────
+    if (!studentName) {
+      const nameCandidates = [
+        $('h1').first().text().trim(),
+        $('h2').first().text().trim(),
+        $('h3').first().text().trim(),
+        $('.student-name').first().text().trim(),
+        $('[class*="name"]').first().text().trim(),
+        $('td:contains("Name")').next('td').text().trim(),
+        $('td:contains("Student Name")').next('td').text().trim(),
+        $('th:contains("Name")').next('th').text().trim(),
+      ];
+
+      for (const candidate of nameCandidates) {
+        if (candidate && candidate.length > 3 && candidate.length < 100 &&
+            !/dashboard|portal|enrollment|subject|grade/i.test(candidate)) {
+          studentName = candidate;
+          break;
+        }
+      }
+
+      if (!studentName) {
+        $('p, span, div, td, li').each((_, el) => {
+          if (studentName) return;
+          const el$ = $(el);
+          if (el$.children().length > 0) return;
+          const txt = el$.text().trim();
+          if (/^[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,4}$/.test(txt)) {
+            studentName = txt;
+          }
+          if (!studentName && /^[A-Z]+,\s+[A-Z]+/.test(txt) && txt.length < 60) {
+            studentName = txt;
+          }
+        });
+      }
+    }
+
+    res.json({ 
+      studentId: cleanStudentId, 
+      studentName: studentName || 'Student', 
+      enrollments 
+    });
 
   } catch (err) {
     console.error('Enrollment fetch error:', err.message);
