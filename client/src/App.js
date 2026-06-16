@@ -227,12 +227,22 @@ function GradesScreen({ enrollment, studentName, onBack }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  // Debug: Log the enrollment data to see what's being passed
+  console.log('📝 Enrollment data in GradesScreen:', {
+    schoolYear: enrollment.schoolYear,
+    semester: enrollment.semester,
+    course: enrollment.course,
+    enrollmentId: enrollment.enrollmentId,
+    yearLevel: enrollment.yearLevel
+  });
+
   React.useEffect(() => {
     setLoading(true);
     setError('');
     fetch(`${API}/api/grades/${enrollment.enrollmentId}`)
       .then(r => r.json())
       .then(d => {
+        console.log('📊 Grades API response:', d);
         if (d.error) throw new Error(d.error);
         setData(d);
       })
@@ -255,9 +265,12 @@ function GradesScreen({ enrollment, studentName, onBack }) {
     // Get course from API or enrollment
     const course = data?.studentInfo?.course || enrollment.course || '';
     
-    // Get school year and semester from enrollment ONLY
+    // ✅ FIX: Get school year and semester from enrollment ONLY
+    // Don't fall back to studentId or any other value
     const schoolYear = enrollment.schoolYear || '';
     const semester = semesterLabel(enrollment.semester) || enrollment.semester || '';
+
+    console.log('📌 Building info line:', { name, course, schoolYear, semester });
 
     // Build the parts array - only add if they exist and are not 'N/A'
     if (name) parts.push(name);
