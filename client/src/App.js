@@ -44,7 +44,6 @@ function formatStudentName(name) {
   return name;
 }
 
-// Format course and year level: "BSIT | 1st Year"
 function formatCourseAndYear(course, yearLevel) {
   const parts = [];
   if (course) parts.push(course);
@@ -187,12 +186,9 @@ function EnrollmentsScreen({ data, onViewGrades, onBack }) {
   const { studentId, studentName, enrollments } = data;
   const displayName = formatStudentName(studentName) || studentId;
   
-  // ✅ FIX: Get avatar letter from student name, NOT from course
-  // Use the student's first name initial (e.g., "J" for James)
+  // Get avatar letter from student name
   const getAvatarLetter = () => {
-    // Try to get the first letter of the first name
-    if (studentName) {
-      // If name is "Last, First", get first letter of first name
+    if (studentName && studentName !== 'Student') {
       if (studentName.includes(',')) {
         const parts = studentName.split(',');
         if (parts.length === 2) {
@@ -200,10 +196,8 @@ function EnrollmentsScreen({ data, onViewGrades, onBack }) {
           return firstName.charAt(0).toUpperCase();
         }
       }
-      // Otherwise get first letter of the full name
       return studentName.charAt(0).toUpperCase();
     }
-    // Fallback to student ID
     return studentId.charAt(0).toUpperCase();
   };
 
@@ -217,19 +211,17 @@ function EnrollmentsScreen({ data, onViewGrades, onBack }) {
             <path d="M12 4l-6 6 6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
         </button>
-        {/* Top bar shows only "BCC Portal" without student name */}
         <span className="top-bar-title">BCC Portal</span>
         <div style={{width: 40}} />
       </div>
 
       <div className="screen-content">
         <div className="student-header">
-          {/* Avatar shows student's name initial (e.g., "J" for James) */}
           <div className="student-avatar">
             {avatarLetter}
           </div>
           <div className="student-info">
-            {studentName && <div className="student-name">{displayName}</div>}
+            <div className="student-name">{displayName}</div>
             <div className="student-id">{studentId}</div>
           </div>
         </div>
