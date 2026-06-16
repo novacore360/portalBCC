@@ -23,6 +23,15 @@ function semesterLabel(sem) {
   return sem;
 }
 
+// Format enrollment title: "2024-2025 | 1st Semester"
+function formatEnrollmentTitle(schoolYear, semester) {
+  const sem = semesterLabel(semester) || semester;
+  if (schoolYear && schoolYear !== 'N/A' && sem) {
+    return `${schoolYear} | ${sem}`;
+  }
+  return schoolYear || sem || 'N/A';
+}
+
 // ── Components ────────────────────────────────────────────────────────────────
 
 function Spinner() {
@@ -127,13 +136,13 @@ function LookupScreen({ onResult }) {
 }
 
 function EnrollmentCard({ enrollment, onViewGrades }) {
+  const title = formatEnrollmentTitle(enrollment.schoolYear, enrollment.semester);
+  
   return (
     <div className="glass-card enrollment-card">
       <div className="enrollment-meta">
-        <div className="enrollment-year">{enrollment.schoolYear}</div>
-        <div className="enrollment-badge">
-          {semesterLabel(enrollment.semester) || enrollment.semester}
-        </div>
+        <div className="enrollment-year">{title}</div>
+        {/* Remove the badge since it's now in the title */}
       </div>
       {enrollment.yearLevel && (
         <div className="enrollment-detail">{enrollment.yearLevel}</div>
@@ -217,6 +226,22 @@ function GradesScreen({ enrollment, studentName, onBack }) {
       .finally(() => setLoading(false));
   }, [enrollment.enrollmentId]);
 
+  // Format: "Student Name | Course | School Year | Semester"
+  const getStudentInfoLine = () => {
+    const parts = [];
+    const name = data?.studentInfo?.name || studentName || '';
+    const course = data?.studentInfo?.course || enrollment.course || '';
+    const schoolYear = enrollment.schoolYear || '';
+    const semester = semesterLabel(enrollment.semester) || enrollment.semester || '';
+
+    if (name) parts.push(name);
+    if (course) parts.push(course);
+    if (schoolYear && schoolYear !== 'N/A') parts.push(schoolYear);
+    if (semester) parts.push(semester);
+
+    return parts.join(' | ');
+  };
+
   return (
     <div className="screen grades-screen">
       <div className="top-bar">
@@ -233,14 +258,14 @@ function GradesScreen({ enrollment, studentName, onBack }) {
         <div className="grades-header glass-card">
           <div className="grades-meta-row">
             <div>
-              <div className="grades-period">{enrollment.schoolYear}</div>
-              <div className="grades-semester">{semesterLabel(enrollment.semester) || enrollment.semester}</div>
+              {/* Student info line: Name | Course | School Year | Semester */}
+              <div className="grades-period" style={{ fontSize: '16px', fontWeight: '600' }}>
+                {getStudentInfoLine() || 'Student Grades'}
+              </div>
+              {/* Remove the separate school year and semester display since they're now in the line above */}
             </div>
             <div className="enrollment-id-chip">ID {enrollment.enrollmentId}</div>
           </div>
-          {(data?.studentInfo?.course || enrollment.course) && (
-            <div className="grades-course">{data?.studentInfo?.course || enrollment.course}</div>
-          )}
         </div>
 
         {loading && (
