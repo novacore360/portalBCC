@@ -187,10 +187,27 @@ function EnrollmentsScreen({ data, onViewGrades, onBack }) {
   const { studentId, studentName, enrollments } = data;
   const displayName = formatStudentName(studentName) || studentId;
   
-  // Get the course from the first enrollment (all enrollments should have same course)
-  const course = enrollments.length > 0 ? enrollments[0].course : '';
-  // Get the first letter of the course for the avatar
-  const avatarLetter = course ? course.charAt(0).toUpperCase() : (studentName || studentId).charAt(0).toUpperCase();
+  // ✅ FIX: Get avatar letter from student name, NOT from course
+  // Use the student's first name initial (e.g., "J" for James)
+  const getAvatarLetter = () => {
+    // Try to get the first letter of the first name
+    if (studentName) {
+      // If name is "Last, First", get first letter of first name
+      if (studentName.includes(',')) {
+        const parts = studentName.split(',');
+        if (parts.length === 2) {
+          const firstName = parts[1].trim();
+          return firstName.charAt(0).toUpperCase();
+        }
+      }
+      // Otherwise get first letter of the full name
+      return studentName.charAt(0).toUpperCase();
+    }
+    // Fallback to student ID
+    return studentId.charAt(0).toUpperCase();
+  };
+
+  const avatarLetter = getAvatarLetter();
 
   return (
     <div className="screen enrollments-screen">
@@ -207,7 +224,7 @@ function EnrollmentsScreen({ data, onViewGrades, onBack }) {
 
       <div className="screen-content">
         <div className="student-header">
-          {/* Avatar shows course initial instead of student name initial */}
+          {/* Avatar shows student's name initial (e.g., "J" for James) */}
           <div className="student-avatar">
             {avatarLetter}
           </div>
