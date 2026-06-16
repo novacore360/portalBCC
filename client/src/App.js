@@ -101,7 +101,7 @@ function LookupScreen({ onResult }) {
               value={studentId}
               onChange={e => setStudentId(e.target.value)}
               onKeyDown={handleKey}
-              placeholder="e.g. 2526-1168"
+              placeholder="e.g. ****-****"
               autoComplete="off"
               autoCapitalize="none"
               spellCheck={false}
