@@ -150,7 +150,8 @@ app.get('/api/enrollments/:studentId', async (req, res) => {
     // ── Extract enrollments ───────────────────────────────────────────────────
     const enrollments = [];
 
-    $('a[href*="https://portal.buenavistacommunitycollege.edu.ph/students/viewGradesStudent/"]').each((_, el) => {
+    // Find all enrollment rows with view grades links
+    $('a[href*="viewGradesStudent"]').each((_, el) => {
       const href = $(el).attr('href') || '';
       const match = href.match(/viewGradesStudent\/(\d+)/);
       if (!match) return;
@@ -162,47 +163,92 @@ app.get('/api/enrollments/:studentId', async (req, res) => {
 
       let schoolYear = '', semester = '', yearLevel = '', course = '';
 
+      // ── Extract School Year ──────────────────────────────────────────────
+      // Looks for pattern: "2024-2025" or "2024–2025"
       const yearMatch = rowText.match(/\b(20\d{2}[-–]20\d{2})\b/);
       if (yearMatch) schoolYear = yearMatch[1];
 
+      // ── Extract Semester ──────────────────────────────────────────────────
+      // Looks for: "1st", "2nd", "3rd", "Summer"
       const semMatch = rowText.match(/\b(1st|2nd|3rd|Summer)\b/i);
       if (semMatch) semester = semMatch[1];
 
+      // ── Extract Year Level ───────────────────────────────────────────────
       const yearLvlMatch = rowText.match(/\b(\d+(?:st|nd|rd|th)\s+Year)\b/i);
       if (yearLvlMatch) yearLevel = yearLvlMatch[1];
 
-      cells.forEach(cell => {
-        if (!schoolYear && /20\d{2}/.test(cell)) schoolYear = cell.match(/20\d{2}[-–]20\d{2}/)?.[0] || '';
-        if (!semester && /(1st|2nd|Summer)/i.test(cell)) semester = cell;
-        if (!yearLevel && /\d+.*(year)/i.test(cell)) yearLevel = cell;
-        if (!course && /BS|AB|BEEd|BEd|BSIT|BSCS|BEED|BS /i.test(cell)) course = cell;
-      });
+      // ── Extract Course ────────────────────────────────────────────────────
+      // Look for course codes
+      const courseMatch = rowText.match(/\b(BSIT|BSCS|BEED|BSED|BSBA|BSTM|BSHM|AB|BS)\b/i);
+      if (courseMatch) course = courseMatch[0].toUpperCase();
 
-      if (!enrollments.find(e => e.enrollmentId === enrollmentId)) {
-        enrollments.push({
-          enrollmentId,
-          schoolYear: schoolYear || 'N/A',
-          semester: semester || 'N/A',
-          yearLevel: yearLevel || '',
-          course: course || '',
-          href
+      // If course not found, check cells
+      if (!course) {
+        cells.forEach(cell => {
+          if (/BSIT|BSCS|BEED|BSED|BSBA|BSTM|BSHM|AB|BS/i.test(cell)) {
+            course = cell.toUpperCase();
+          }
         });
       }
+
+      // ── Fallback: if still not found, try to extract from cell positions ──
+      if (!schoolYear && cells.length > 0) {
+        // Try to find year in any cell
+        for (const cell of cells) {
+          const yMatch = cell.match(/\b(20\d{2}[-–]20\d{2})\b/);
+          if (yMatch) { schoolYear = yMatch[1]; break; }
+        }
+      }
+      
+      if (!semester && cells.length > 0) {
+        for (const cell of cells) {
+          if (/1st|2nd|Summer/i.test(cell)) { 
+            semester = cell.match(/\b(1st|2nd|Summer)\b/i)?.[0] || '';
+            break; 
+          }
+        }
+      }
+
+      enrollments.push({
+        enrollmentId,
+        schoolYear: schoolYear || 'N/A',
+        semester: semester || 'N/A',
+        yearLevel: yearLevel || '',
+        course: course || '',
+        href
+      });
     });
 
-    // Fallback: table rows
+    // Fallback: table rows without view grades links
     if (enrollments.length === 0) {
       $('table tbody tr').each((_, row) => {
         const cells = $(row).find('td').map((_, td) => $(td).text().trim()).get();
         const link = $(row).find('a[href*="viewGradesStudent"]').attr('href') || '';
         const match = link.match(/viewGradesStudent\/(\d+)/);
         if (match && cells.length > 0) {
+          let schoolYear = '', semester = '', yearLevel = '', course = '';
+          
+          // Try to extract from cells
+          for (const cell of cells) {
+            const yMatch = cell.match(/\b(20\d{2}[-–]20\d{2})\b/);
+            if (yMatch && !schoolYear) schoolYear = yMatch[1];
+            if (/1st|2nd|Summer/i.test(cell) && !semester) {
+              semester = cell.match(/\b(1st|2nd|Summer)\b/i)?.[0] || '';
+            }
+            if (/\b(BSIT|BSCS|BEED|BSED|BSBA|BSTM|BSHM|AB|BS)\b/i.test(cell) && !course) {
+              course = cell.toUpperCase();
+            }
+            if (/\b(\d+(?:st|nd|rd|th)\s+Year)\b/i.test(cell) && !yearLevel) {
+              yearLevel = cell;
+            }
+          }
+
           enrollments.push({
             enrollmentId: match[1],
-            schoolYear: cells[0] || 'N/A',
-            semester: cells[1] || 'N/A',
-            yearLevel: cells[2] || '',
-            course: cells[3] || '',
+            schoolYear: schoolYear || 'N/A',
+            semester: semester || 'N/A',
+            yearLevel: yearLevel || '',
+            course: course || '',
             href: link
           });
         }
@@ -243,24 +289,20 @@ app.get('/api/grades/:enrollmentId', async (req, res) => {
     }
 
     // ── Step 2: Extract Vue.js variables from the page ─────────────────────
-    // These are the keys we need to call the internal API
     let studentPk = '';
     let ayId = '';
     let sem = '';
 
-    // Method 1: Look for var declarations in script tags
+    // Look for var declarations in script tags
     const scriptMatches = html.match(/<script[^>]*>([\s\S]*?)<\/script>/g);
     if (scriptMatches) {
       for (const script of scriptMatches) {
-        // Look for var student_pk = '12515'
         const pkMatch = script.match(/var\s+student_pk\s*=\s*['"]([^'"]+)['"]/);
         if (pkMatch) studentPk = pkMatch[1];
         
-        // Look for var ay = '9'
         const ayMatch = script.match(/var\s+ay\s*=\s*['"]([^'"]+)['"]/);
         if (ayMatch) ayId = ayMatch[1];
         
-        // Look for var sem = '1st'
         const semMatch = script.match(/var\s+sem\s*=\s*['"]([^'"]+)['"]/);
         if (semMatch) sem = semMatch[1];
         
@@ -288,7 +330,7 @@ app.get('/api/grades/:enrollmentId', async (req, res) => {
         const data = await fetchAPI(apiUrl);
         
         if (data && data.length > 0) {
-          // ── Transform API response to match frontend expectations ──────
+          // ── Transform API response ──────────────────────────────────────
           const grades = data.map(el => ({
             subjectCode: el.subject?.code || '',
             subjectTitle: el.subject?.description || '',
@@ -333,17 +375,15 @@ app.get('/api/grades/:enrollmentId', async (req, res) => {
             grades,
             gwa,
             remarks,
-            source: 'api',
-            _debug: { studentPk, ayId, sem }
+            source: 'api'
           });
         }
       } catch (apiError) {
         console.error('API fetch error:', apiError.message);
-        // Fall through to static HTML parsing
       }
     }
 
-    // ── Step 4: Fallback to static HTML parsing if API fails ──────────────
+    // ── Step 4: Fallback to static HTML parsing ──────────────────────────
     console.log('⚠️ API method failed, falling back to static HTML parsing...');
     
     const $ = cheerio.load(html);
@@ -355,18 +395,13 @@ app.get('/api/grades/:enrollmentId', async (req, res) => {
       const $table = $(table);
       const headerText = $table.find('tr').first().text().trim();
       
-      // Check if this is the grades table (contains Student id and Fullname)
       if (headerText.includes('Student id') && headerText.includes('Fullname')) {
         $table.find('tr').each((_, row) => {
           const cells = $(row).find('td').map((_, td) => $(td).text().trim()).get();
           
-          // Skip header row
           if (cells[0] === 'Student id' || cells[0] === 'Fullname') return;
-          
-          // Skip empty rows
           if (cells.length < 4) return;
           
-          // Check if this is a valid subject row
           if (cells[2] && /^[A-Z]{2,}[\s\-]?\d/.test(cells[2])) {
             grades.push({
               studentId: cells[0] || '',
@@ -380,7 +415,6 @@ app.get('/api/grades/:enrollmentId', async (req, res) => {
               status: cells[7] || ''
             });
             
-            // Extract student info from first row
             if (grades.length === 1) {
               studentInfo = {
                 name: cells[1] || '',
@@ -391,7 +425,7 @@ app.get('/api/grades/:enrollmentId', async (req, res) => {
             }
           }
         });
-        return false; // Stop iterating tables
+        return false;
       }
     });
 
