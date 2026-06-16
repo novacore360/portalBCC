@@ -120,7 +120,7 @@ app.get('/api/enrollments/:studentId', async (req, res) => {
     // ── Extract enrollments ───────────────────────────────────────────────────
     const enrollments = [];
 
-    $('a[href*="/students/viewGradesStudent/"]').each((_, el) => {
+    $('a[href*="https://portal.buenavistacommunitycollege.edu.ph/students/viewGradesStudent/"]').each((_, el) => {
       const href = $(el).attr('href') || '';
       const match = href.match(/viewGradesStudent\/(\d+)/);
       if (!match) return;
