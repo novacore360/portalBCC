@@ -1,8 +1,11 @@
+require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const cheerio = require('cheerio');
 const cors = require('cors');
 const path = require('path');
+const nodemailer = require('nodemailer');
+const ExcelJS = require('exceljs');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -86,6 +89,206 @@ function isLoginPage(html) {
     lower.includes('name="password"') ||
     lower.includes('login') && lower.includes('<form') && !lower.includes('viewgradesstu')
   );
+}
+
+// ── Request Copy (email) helpers ─────────────────────────────────────────────
+
+// SMTP transporter — credentials come from .env (see server/.env.example)
+const transporter = nodemailer.createTransport({
+  host: process.env.SMTP_HOST || 'smtp.gmail.com',
+  port: Number(process.env.SMTP_PORT) || 465,
+  secure: process.env.SMTP_SECURE !== 'false',
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
+  },
+});
+
+function isValidEmail(value) {
+  return typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function slugifyFilename(str) {
+  const slug = String(str)
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80);
+  return slug || 'Student_Grades';
+}
+
+// Builds the .xlsx workbook buffer for a grades request
+async function buildGradesWorkbookBuffer(heading, enrollmentId, gradesData) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'BCC Portal';
+  workbook.created = new Date();
+
+  const sheet = workbook.addWorksheet('Grades', {
+    pageSetup: { fitToPage: true, orientation: 'landscape' },
+    views: [{ showGridLines: false }],
+  });
+
+  const columns = [
+    { header: 'Subject Code', width: 16 },
+    { header: 'Subject Title', width: 38 },
+    { header: 'Units', width: 10 },
+    { header: 'Midterm', width: 12 },
+    { header: 'Final Grade', width: 14 },
+    { header: 'Remarks', width: 14 },
+  ];
+  const colCount = columns.length;
+  columns.forEach((col, i) => { sheet.getColumn(i + 1).width = col.width; });
+
+  // Title (heading from View Grades)
+  sheet.mergeCells(1, 1, 1, colCount);
+  const titleCell = sheet.getCell(1, 1);
+  titleCell.value = heading;
+  titleCell.font = { name: 'Calibri', size: 14, bold: true, color: { argb: 'FF0A2414' } };
+  titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+  sheet.getRow(1).height = 24;
+
+  // Subtitle (enrollment id + generated date)
+  sheet.mergeCells(2, 1, 2, colCount);
+  const subtitleCell = sheet.getCell(2, 1);
+  subtitleCell.value = `Enrollment ID: ${enrollmentId}   |   Generated: ${new Date().toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' })}`;
+  subtitleCell.font = { name: 'Calibri', size: 10, italic: true, color: { argb: 'FF666666' } };
+  subtitleCell.alignment = { horizontal: 'center' };
+  sheet.getRow(2).height = 18;
+
+  // Header row
+  const headerRowNum = 4;
+  columns.forEach((col, i) => {
+    const cell = sheet.getCell(headerRowNum, i + 1);
+    cell.value = col.header;
+    cell.font = { name: 'Calibri', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0A2414' } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.border = { bottom: { style: 'thin', color: { argb: 'FFC9A84C' } } };
+  });
+  sheet.getRow(headerRowNum).height = 20;
+
+  // Data rows
+  let rowNum = headerRowNum + 1;
+  (gradesData.grades || []).forEach((g) => {
+    const row = sheet.getRow(rowNum);
+    row.getCell(1).value = g.subjectCode || '';
+    row.getCell(2).value = g.subjectTitle || '';
+    row.getCell(3).value = g.units && !isNaN(parseFloat(g.units)) ? parseFloat(g.units) : (g.units || '');
+    row.getCell(4).value = g.midterm || '';
+    row.getCell(5).value = g.finalGrade || '';
+    row.getCell(6).value = g.remarks || '';
+    row.eachCell((cell, colNum) => {
+      cell.font = { name: 'Calibri', size: 10.5 };
+      cell.alignment = { vertical: 'middle', horizontal: colNum === 2 ? 'left' : 'center' };
+      cell.border = { bottom: { style: 'hair', color: { argb: 'FFE0E0E0' } } };
+      if (rowNum % 2 === 0) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF7F5EE' } };
+      }
+    });
+    rowNum += 1;
+  });
+
+  // GWA summary
+  if (gradesData.gwa) {
+    rowNum += 1;
+    sheet.mergeCells(rowNum, 1, rowNum, colCount - 2);
+    const gwaLabelCell = sheet.getCell(rowNum, 1);
+    gwaLabelCell.value = 'General Weighted Average';
+    gwaLabelCell.font = { name: 'Calibri', size: 11, bold: true };
+    gwaLabelCell.alignment = { horizontal: 'right' };
+
+    sheet.mergeCells(rowNum, colCount - 1, rowNum, colCount);
+    const gwaValueCell = sheet.getCell(rowNum, colCount - 1);
+    gwaValueCell.value = gradesData.remarks ? `${gradesData.gwa}  (${gradesData.remarks})` : `${gradesData.gwa}`;
+    gwaValueCell.font = { name: 'Calibri', size: 11, bold: true, color: { argb: 'FF0A2414' } };
+    gwaValueCell.alignment = { horizontal: 'center' };
+  }
+
+  // Disclaimer
+  rowNum += 2;
+  sheet.mergeCells(rowNum, 1, rowNum, colCount);
+  const disclaimerCell = sheet.getCell(rowNum, 1);
+  disclaimerCell.value =
+    'This document was generated by BCC Portal, a tool created to assist students who have lost access to their official portal login credentials. ' +
+    'All figures above were retrieved directly from the official Buenavista Community College portal using public GET requests at the time of this ' +
+    'request, and are provided for the personal reference of the named student only. This is not an official transcript or certified document.';
+  disclaimerCell.font = { name: 'Calibri', size: 8, italic: true, color: { argb: 'FF888888' } };
+  disclaimerCell.alignment = { wrapText: true, vertical: 'top' };
+  sheet.getRow(rowNum).height = 42;
+
+  return workbook.xlsx.writeBuffer();
+}
+
+// Builds the HTML email body sent alongside the attachment
+function buildRequestCopyEmailHtml({ heading, enrollmentId, gwa, remarks }) {
+  const summaryRow = gwa
+    ? `<tr>
+         <td style="padding:8px 0;border-bottom:1px solid #eeeeee;color:#777777;font-size:13px;">General Weighted Average</td>
+         <td style="padding:8px 0;border-bottom:1px solid #eeeeee;color:#1a1a1a;font-size:13px;font-weight:bold;text-align:right;">${escapeHtml(gwa)}${remarks ? ' (' + escapeHtml(remarks) + ')' : ''}</td>
+       </tr>`
+    : '';
+
+  return `<!DOCTYPE html>
+<html>
+  <body style="margin:0;padding:0;background-color:#f4f4f4;font-family:Arial,Helvetica,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f4;padding:32px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;overflow:hidden;border:1px solid #e2e2e2;">
+            <tr>
+              <td style="background-color:#0A2414;padding:24px 32px;">
+                <span style="color:#E2C36A;font-size:20px;font-weight:bold;letter-spacing:0.5px;">BCC Portal</span>
+                <div style="color:#cfd8c8;font-size:12px;margin-top:4px;">Buenavista Community College</div>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:32px;">
+                <h2 style="margin:0 0 8px;color:#1a1a1a;font-size:18px;">Requested Copy of Grades</h2>
+                <p style="margin:0 0 20px;color:#444444;font-size:14px;line-height:1.6;">
+                  Please find attached the requested copy of grade records in spreadsheet (.xlsx) format, as requested through BCC Portal.
+                </p>
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:20px;">
+                  <tr>
+                    <td style="padding:8px 0;border-bottom:1px solid #eeeeee;color:#777777;font-size:13px;">Record</td>
+                    <td style="padding:8px 0;border-bottom:1px solid #eeeeee;color:#1a1a1a;font-size:13px;font-weight:bold;text-align:right;">${escapeHtml(heading)}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:8px 0;border-bottom:1px solid #eeeeee;color:#777777;font-size:13px;">Enrollment ID</td>
+                    <td style="padding:8px 0;border-bottom:1px solid #eeeeee;color:#1a1a1a;font-size:13px;text-align:right;">${escapeHtml(String(enrollmentId))}</td>
+                  </tr>
+                  ${summaryRow}
+                </table>
+                <p style="margin:0;color:#444444;font-size:13px;line-height:1.6;">
+                  The attached file contains the full subject list with midterm and final grades for this enrollment period.
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:20px 32px;background-color:#fafafa;border-top:1px solid #eeeeee;">
+                <p style="margin:0;color:#888888;font-size:11px;line-height:1.6;">
+                  Disclaimer: BCC Portal is an unofficial tool created to assist students who have forgotten their login credentials for the official
+                  Buenavista Community College portal. All data included in this email and its attachment was retrieved directly from the official
+                  BCC portal using public GET requests, without modification, at the time this request was made. This document is intended solely
+                  for the personal reference of the named student and should not be treated as an official transcript or certified document. For
+                  official records, please contact the BCC Registrar's Office directly.
+                </p>
+              </td>
+            </tr>
+          </table>
+          <p style="color:#aaaaaa;font-size:11px;margin-top:16px;">This is an automated message from BCC Portal. Please do not reply to this email.</p>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
 }
 
 // ── Extract student name from view grades page ──────────────────────────────
@@ -368,18 +571,17 @@ app.get('/api/enrollments/:studentId', async (req, res) => {
 });
 
 // ── Grades scraper ────────────────────────────────────────────────────────────
+// Shared by GET /api/grades/:enrollmentId and POST /api/request-copy so both
+// always pull the same live data straight from the portal via GET requests.
 
-app.get('/api/grades/:enrollmentId', async (req, res) => {
-  const { enrollmentId } = req.params;
-
-  try {
+async function getGradesData(enrollmentId) {
     const pageUrl = `${BASE_URL}/students/viewGradesStudent/${enrollmentId}/`;
     const html = await fetchPage(pageUrl);
 
     if (isLoginPage(html)) {
-      return res.status(401).json({
-        error: 'The portal requires a login session to view grade details.'
-      });
+      const err = new Error('The portal requires a login session to view grade details.');
+      err.status = 401;
+      throw err;
     }
 
     let studentPk = '';
@@ -454,14 +656,14 @@ app.get('/api/grades/:enrollmentId', async (req, res) => {
             studentId: data[0]?.enrolled_by_student?.student?.student_id || '',
           };
 
-          return res.json({
+          return {
             enrollmentId,
             studentInfo,
             grades,
             gwa,
             remarks,
             source: 'api'
-          });
+          };
         }
       } catch (apiError) {
         console.error('API fetch error:', apiError.message);
@@ -513,9 +715,9 @@ app.get('/api/grades/:enrollmentId', async (req, res) => {
     });
 
     if (grades.length === 0) {
-      return res.status(404).json({
-        error: 'No grades found. The portal may have changed its structure.'
-      });
+      const err = new Error('No grades found. The portal may have changed its structure.');
+      err.status = 404;
+      throw err;
     }
 
     let totalUnits = 0;
@@ -533,25 +735,94 @@ app.get('/api/grades/:enrollmentId', async (req, res) => {
     const gwa = totalUnits > 0 ? (totalGradePoints / totalUnits).toFixed(2) : 'N/A';
     const remarks = totalUnits > 0 ? 'Passed' : 'No grades available';
 
-    res.json({
+    return {
       enrollmentId,
       studentInfo,
       grades,
       gwa,
       remarks,
       source: 'static_html'
-    });
+    };
+}
 
+app.get('/api/grades/:enrollmentId', async (req, res) => {
+  const { enrollmentId } = req.params;
+
+  try {
+    const result = await getGradesData(enrollmentId);
+    res.json(result);
   } catch (err) {
     console.error('Grades fetch error:', err.message);
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
     if (err.response) {
       console.error('Response status:', err.response.status);
       console.error('Response data:', err.response.data);
     }
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Could not fetch grades. Try again later.',
-      details: err.message 
+      details: err.message
     });
+  }
+});
+
+// ── Request Copy ──────────────────────────────────────────────────────────────
+// Re-fetches the grade data live from the portal (same as above) for the given
+// enrollment ID, builds an .xlsx workbook, and emails it to the requested address.
+
+app.post('/api/request-copy', async (req, res) => {
+  const { enrollmentId, email, heading } = req.body || {};
+
+  if (!enrollmentId || !/^\d+$/.test(String(enrollmentId))) {
+    return res.status(400).json({ error: 'A valid enrollment ID is required.' });
+  }
+  if (!isValidEmail(email)) {
+    return res.status(400).json({ error: 'Please enter a valid email address.' });
+  }
+  if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+    console.error('SMTP credentials are not configured. Set SMTP_USER and SMTP_PASS in .env');
+    return res.status(500).json({ error: 'Email sending is not configured on the server.' });
+  }
+
+  try {
+    const gradesData = await getGradesData(enrollmentId);
+
+    if (!gradesData.grades || gradesData.grades.length === 0) {
+      return res.status(404).json({ error: 'No grade records were found to send for this enrollment.' });
+    }
+
+    const safeHeading = (heading && String(heading).trim().slice(0, 150)) || 'BCC Student Grades';
+    const fileName = `${slugifyFilename(safeHeading)}_Grades.xlsx`;
+
+    const buffer = await buildGradesWorkbookBuffer(safeHeading, enrollmentId, gradesData);
+
+    await transporter.sendMail({
+      from: `"${process.env.SMTP_FROM_NAME || 'BCC Portal'}" <${process.env.SMTP_USER}>`,
+      to: email.trim(),
+      subject: 'Request Copy',
+      html: buildRequestCopyEmailHtml({
+        heading: safeHeading,
+        enrollmentId,
+        gwa: gradesData.gwa,
+        remarks: gradesData.remarks,
+      }),
+      attachments: [
+        {
+          filename: fileName,
+          content: buffer,
+          contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        },
+      ],
+    });
+
+    res.json({ success: true, message: `Grades sent to ${email.trim()}.` });
+  } catch (err) {
+    console.error('Request copy error:', err.message);
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    res.status(500).json({ error: 'Could not send the requested copy. Please try again later.' });
   }
 });
 
