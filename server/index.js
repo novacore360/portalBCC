@@ -3,6 +3,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const cors = require('cors');
 const path = require('path');
+const nodemailer = require('nodemailer');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -11,10 +12,237 @@ const BASE_URL = 'https://portal.buenavistacommunitycollege.edu.ph';
 app.use(cors());
 app.use(express.json());
 
-// Serve React build in production
+// ── SMTP Email Configuration ────────────────────────────────────────────────
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: 'bitfi.ventures@gmail.com',
+    pass: 'tixs xirf bset shel'
+  }
+});
+
+// ── Generate HTML grade report ──────────────────────────────────────────────
+function generateGradeHTML(data) {
+  const { studentName, course, schoolYear, semester, grades, gwa, remarks, enrollment } = data;
+  
+  let gradeRows = '';
+  if (grades && grades.length > 0) {
+    grades.forEach(g => {
+      gradeRows += `
+        <tr>
+          <td style="padding: 8px 12px; border-bottom: 1px solid #e5e5e5; font-size: 13px;">${g.subjectCode || ''}</td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid #e5e5e5; font-size: 13px;">${g.subjectTitle || ''}</td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid #e5e5e5; font-size: 13px; text-align: center;">${g.units || ''}</td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid #e5e5e5; font-size: 13px; text-align: center;">${g.midterm || ''}</td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid #e5e5e5; font-size: 13px; text-align: center;">${g.finalGrade || ''}</td>
+          <td style="padding: 8px 12px; border-bottom: 1px solid #e5e5e5; font-size: 13px; text-align: center;">${g.remarks || ''}</td>
+        </tr>
+      `;
+    });
+  } else {
+    gradeRows = '<tr><td colspan="6" style="padding: 16px; text-align: center; color: #8a8a8a;">No grade data available.</td></tr>';
+  }
+
+  const isPassed = remarks && remarks.toLowerCase().includes('pass');
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BCC Grade Report</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #f8f6f0; margin: 0; padding: 40px 20px; color: #1a1a1a; }
+    .container { max-width: 800px; margin: 0 auto; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); overflow: hidden; }
+    .header { background: #0A2414; padding: 30px 40px; border-bottom: 4px solid #C9A84C; }
+    .header h1 { color: #C9A84C; font-size: 22px; font-weight: 700; margin: 0; letter-spacing: -0.5px; }
+    .header p { color: #B8C9A8; font-size: 14px; margin: 6px 0 0 0; }
+    .body { padding: 30px 40px; }
+    .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 24px; background: #f5f2eb; padding: 16px 20px; border-radius: 8px; margin-bottom: 24px; }
+    .info-grid .label { font-size: 11px; font-weight: 700; color: #8a7a5a; text-transform: uppercase; letter-spacing: 0.5px; }
+    .info-grid .value { font-size: 15px; font-weight: 500; color: #1a1a1a; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    table thead th { background: #0A2414; color: #C9A84C; padding: 10px 12px; text-align: left; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+    table tbody tr:hover { background: #f5f2eb; }
+    .gwa-section { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; background: #f5f2eb; border-radius: 8px; margin-top: 20px; }
+    .gwa-section .gwa-label { font-size: 13px; font-weight: 600; color: #8a7a5a; text-transform: uppercase; letter-spacing: 0.5px; }
+    .gwa-section .gwa-value { font-size: 28px; font-weight: 700; color: ${isPassed ? '#2d7d3a' : '#b33a3a'}; }
+    .gwa-section .gwa-remark { font-size: 12px; font-weight: 700; padding: 4px 14px; border-radius: 20px; background: ${isPassed ? '#e6f4e6' : '#fce8e8'}; color: ${isPassed ? '#2d7d3a' : '#b33a3a'}; text-transform: uppercase; letter-spacing: 0.5px; }
+    .footer { padding: 20px 40px; background: #f5f2eb; font-size: 11px; color: #8a8a8a; text-align: center; border-top: 1px solid #e5e5e5; line-height: 1.6; }
+    .footer strong { color: #0A2414; }
+    @media (max-width: 600px) {
+      .body { padding: 20px; }
+      .header { padding: 20px; }
+      .info-grid { grid-template-columns: 1fr; gap: 6px; }
+      .gwa-section { flex-direction: column; gap: 8px; text-align: center; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>BCC Portal Grade Report</h1>
+      <p>Buenavista Community College</p>
+    </div>
+    <div class="body">
+      <div class="info-grid">
+        <div><div class="label">Student Name</div><div class="value">${studentName || 'N/A'}</div></div>
+        <div><div class="label">Course</div><div class="value">${course || 'N/A'}</div></div>
+        <div><div class="label">School Year</div><div class="value">${schoolYear || 'N/A'}</div></div>
+        <div><div class="label">Semester</div><div class="value">${semester || 'N/A'}</div></div>
+        <div><div class="label">Enrollment ID</div><div class="value">${enrollment?.enrollmentId || 'N/A'}</div></div>
+      </div>
+
+      <h3 style="font-size: 15px; font-weight: 600; margin: 0 0 10px 0; color: #0A2414;">Grade Summary</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Subject Code</th>
+            <th>Subject Title</th>
+            <th style="text-align: center;">Units</th>
+            <th style="text-align: center;">Midterm</th>
+            <th style="text-align: center;">Final</th>
+            <th style="text-align: center;">Remarks</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${gradeRows}
+        </tbody>
+      </table>
+
+      <div class="gwa-section">
+        <span class="gwa-label">General Weighted Average</span>
+        <span class="gwa-value">${gwa || 'N/A'}</span>
+        <span class="gwa-remark">${remarks || 'N/A'}</span>
+      </div>
+    </div>
+    <div class="footer">
+      <p>
+        <strong>BCC Portal</strong> &bull; This report was generated on ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })} at ${new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}<br>
+        <span style="color: #aaa;">This system is used and created for students who forgot their login credentials. All data is requested from the main BCC portal using GET requests.</span>
+      </p>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+function formatStudentName(name) {
+  if (!name) return '';
+  if (name.includes(',')) {
+    const parts = name.split(',');
+    if (parts.length === 2) {
+      const lastName = parts[0].trim();
+      const firstName = parts[1].trim();
+      return `${firstName} ${lastName}`;
+    }
+  }
+  return name;
+}
+
+// ── Send Grade Copy Endpoint ──────────────────────────────────────────────
+
+app.post('/api/send-grade-copy', async (req, res) => {
+  const { email, enrollmentId, studentName, course, schoolYear, semester, grades, gwa, remarks, studentInfo, enrollment } = req.body;
+
+  if (!email || !enrollmentId) {
+    return res.status(400).json({ error: 'Email and enrollment ID are required.' });
+  }
+
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    return res.status(400).json({ error: 'Please enter a valid email address.' });
+  }
+
+  try {
+    const nameParts = [];
+    const formattedName = formatStudentName(studentName);
+    if (formattedName) nameParts.push(formattedName);
+    if (course) nameParts.push(course);
+    if (schoolYear && schoolYear !== 'N/A') nameParts.push(schoolYear);
+    if (semester) nameParts.push(semester);
+    
+    const fileName = nameParts.length > 0 
+      ? `BCC_Grades_${nameParts.join('_').replace(/\s+/g, '_')}`
+      : `BCC_Grades_${enrollmentId}`;
+
+    const htmlContent = generateGradeHTML({
+      studentName: studentName || 'Student',
+      course: course || studentInfo?.course || '',
+      schoolYear: schoolYear || '',
+      semester: semester || '',
+      grades: grades || [],
+      gwa: gwa || 'N/A',
+      remarks: remarks || 'N/A',
+      enrollment: enrollment || { enrollmentId }
+    });
+
+    const mailOptions = {
+      from: '"BCC Portal" <bitfi.ventures@gmail.com>',
+      to: email,
+      subject: 'BCC Portal - Grade Report Request',
+      html: `
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; color: #1a1a1a; background: #f8f6f0; border-radius: 12px;">
+          <div style="background: #0A2414; padding: 20px 24px; border-radius: 12px 12px 0 0; border-bottom: 3px solid #C9A84C;">
+            <h1 style="color: #C9A84C; font-size: 20px; margin: 0; font-weight: 700;">BCC Portal</h1>
+            <p style="color: #B8C9A8; margin: 4px 0 0 0; font-size: 14px;">Buenavista Community College</p>
+          </div>
+          <div style="background: #ffffff; padding: 24px; border-radius: 0 0 12px 12px;">
+            <p style="font-size: 15px; margin: 0 0 6px 0;">Dear Student,</p>
+            <p style="font-size: 14px; color: #444; margin: 0 0 16px 0; line-height: 1.6;">
+              You requested a copy of your grades from the BCC Portal. Please find the attached HTML file containing your grade report.
+            </p>
+            <div style="background: #f5f2eb; padding: 14px 18px; border-radius: 8px; margin-bottom: 16px;">
+              <p style="margin: 0; font-size: 13px; color: #555;">
+                <strong>Student:</strong> ${studentName || 'N/A'}<br>
+                <strong>Enrollment ID:</strong> ${enrollmentId}<br>
+                <strong>GWA:</strong> ${gwa || 'N/A'} &bull; <strong>Status:</strong> ${remarks || 'N/A'}
+              </p>
+            </div>
+            <p style="font-size: 13px; color: #777; margin: 0 0 4px 0; line-height: 1.5;">
+              If you have any questions, please contact the BCC Registrar's Office.
+            </p>
+            <p style="font-size: 13px; color: #777; margin: 0; line-height: 1.5;">
+              Best regards,<br>
+              <strong style="color: #0A2414;">BCC Portal Team</strong>
+            </p>
+            <hr style="border: none; border-top: 1px solid #e5e5e5; margin: 18px 0 12px 0;">
+            <p style="font-size: 11px; color: #999; margin: 0; line-height: 1.5; text-align: center;">
+              This system is used and created for students who forgot their login credentials. 
+              All data is requested from the main BCC portal using GET requests.
+            </p>
+          </div>
+        </div>
+      `,
+      attachments: [
+        {
+          filename: `${fileName}.html`,
+          content: htmlContent,
+          contentType: 'text/html'
+        }
+      ]
+    };
+
+    await transporter.sendMail(mailOptions);
+    
+    res.json({ 
+      success: true, 
+      message: 'Grade copy sent successfully!',
+      fileName: `${fileName}.html`
+    });
+
+  } catch (error) {
+    console.error('Email send error:', error.message);
+    res.status(500).json({ 
+      error: 'Failed to send email. Please try again later.' 
+    });
+  }
+});
+
+// ── Serve React build ──────────────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, '../client/build')));
 
-// Shared axios instance — maintains cookies across requests in a session
+// ── Shared axios instance ──────────────────────────────────────────────────
 const httpClient = axios.create({
   timeout: 20000,
   maxRedirects: 5,
@@ -30,7 +258,6 @@ const httpClient = axios.create({
   }
 });
 
-// API client for JSON requests
 const apiClient = axios.create({
   timeout: 20000,
   withCredentials: true,
@@ -42,7 +269,6 @@ const apiClient = axios.create({
   }
 });
 
-// Cookie jar (shared per process — good enough for a personal-use tool)
 let sessionCookies = '';
 
 async function fetchPage(url) {
@@ -88,48 +314,6 @@ function isLoginPage(html) {
   );
 }
 
-// ── Extract student name from view grades page ──────────────────────────────
-function extractStudentNameFromGradesPage(html) {
-  const $ = cheerio.load(html);
-  
-  // Try to find the student name in the Vue.js data
-  // Look for: var student_pk = '12515' and then get name from API response
-  
-  // Method 1: Look for the name in the Vue.js created() method or data
-  const scriptMatches = html.match(/<script[^>]*>([\s\S]*?)<\/script>/g);
-  if (scriptMatches) {
-    for (const script of scriptMatches) {
-      // Look for fullname pattern in the Vue data
-      const nameMatch = script.match(/fullname["']?\s*:\s*["']([^"']+)["']/);
-      if (nameMatch) {
-        return nameMatch[1];
-      }
-      // Look for student name in the API URL pattern
-      const apiMatch = script.match(/\/Api\/enrollbystudsub\/\d+\/\d+\/([^'"`]+)/);
-      if (apiMatch) {
-        // The semester is captured, but we need the name from the page
-        // Keep looking
-      }
-    }
-  }
-  
-  // Method 2: Look for the name in the table data (first row)
-  $('table').each((_, table) => {
-    const $table = $(table);
-    const headerText = $table.find('tr').first().text().trim();
-    
-    if (headerText.includes('Student id') && headerText.includes('Fullname')) {
-      const firstRow = $table.find('tr').eq(1);
-      const cells = firstRow.find('td').map((_, td) => $(td).text().trim()).get();
-      if (cells.length >= 2 && cells[1]) {
-        return cells[1]; // Fullname column
-      }
-    }
-  });
-  
-  return '';
-}
-
 // ── Enrollment scraper ────────────────────────────────────────────────────────
 
 app.get('/api/enrollments/:studentId', async (req, res) => {
@@ -148,7 +332,6 @@ app.get('/api/enrollments/:studentId', async (req, res) => {
 
     const $ = cheerio.load(html);
 
-    // ── Extract enrollments first ────────────────────────────────────────────
     const enrollments = [];
     const seenEnrollmentIds = new Set();
 
@@ -168,15 +351,12 @@ app.get('/api/enrollments/:studentId', async (req, res) => {
 
       let schoolYear = '', semester = '', yearLevel = '', course = '';
 
-      // Extract School Year
       const yearMatch = rowText.match(/\b(20\d{2}[-–]20\d{2})\b/);
       if (yearMatch) schoolYear = yearMatch[1];
 
-      // Extract Semester
       const semMatch = rowText.match(/\b(1st|2nd|3rd|Summer)\b/i);
       if (semMatch) semester = semMatch[1];
 
-      // Extract Year Level
       const yearLvlMatch = rowText.match(/\b(\d+(?:st|nd|rd|th)\s+Year)\b/i);
       if (yearLvlMatch) {
         yearLevel = yearLvlMatch[1];
@@ -191,7 +371,6 @@ app.get('/api/enrollments/:studentId', async (req, res) => {
         }
       }
 
-      // Extract Course
       const courseRegex = /\b(BSIT|BSCS|BEED|BSED|BSBA|BSTM|BSHM|AB|BS|BSCE|BSEE|BSCrim|BSMath|BSSW|BSBio)\b/i;
       const courseMatch = rowText.match(courseRegex);
       if (courseMatch) {
@@ -224,9 +403,7 @@ app.get('/api/enrollments/:studentId', async (req, res) => {
       });
     }
 
-    // ── Get student name from the first enrollment's view grades page ──────
     let studentName = '';
-    
     if (enrollments.length > 0) {
       try {
         const firstEnrollmentId = enrollments[0].enrollmentId;
@@ -234,11 +411,8 @@ app.get('/api/enrollments/:studentId', async (req, res) => {
         console.log(`📡 Fetching grades page for name: ${gradesUrl}`);
         
         const gradesHtml = await fetchPage(gradesUrl);
-        
-        // Try to extract name from the grades page
         const $grades = cheerio.load(gradesHtml);
         
-        // Method 1: Look for the name in the table
         $grades('table').each((_, table) => {
           const $table = $(table);
           const headerText = $table.find('tr').first().text().trim();
@@ -253,7 +427,6 @@ app.get('/api/enrollments/:studentId', async (req, res) => {
           }
         });
         
-        // Method 2: Look for Vue.js variables and then call the API
         if (!studentName) {
           const scriptMatches = gradesHtml.match(/<script[^>]*>([\s\S]*?)<\/script>/g);
           if (scriptMatches) {
@@ -289,7 +462,6 @@ app.get('/api/enrollments/:studentId', async (req, res) => {
           }
         }
         
-        // Method 3: Look for name in h1/h2 tags
         if (!studentName) {
           const nameCandidates = [
             $grades('h1').first().text().trim(),
@@ -315,7 +487,6 @@ app.get('/api/enrollments/:studentId', async (req, res) => {
       }
     }
 
-    // ── Fallback: try to get name from the enrollment page ─────────────────
     if (!studentName) {
       const nameCandidates = [
         $('h1').first().text().trim(),
@@ -555,7 +726,8 @@ app.get('/api/grades/:enrollmentId', async (req, res) => {
   }
 });
 
-// Catch-all: serve React app
+// ── Catch-all: serve React app ────────────────────────────────────────────────
+
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../client/build', 'index.html'));
 });
