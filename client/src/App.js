@@ -149,6 +149,9 @@ function LookupScreen({ onResult }) {
         </div>
 
         <p className="footer-note">Data is fetched directly from the BCC portal.</p>
+        <p className="disclaimer-note">
+          This system was created for students who have forgotten their login credentials for the official BCC portal. All data shown here is requested from the main BCC portal using public GET requests.
+        </p>
       </div>
     </div>
   );
@@ -242,10 +245,102 @@ function EnrollmentsScreen({ data, onViewGrades, onBack }) {
   );
 }
 
+function RequestCopyModal({ enrollmentId, heading, onClose }) {
+  const [email, setEmail] = useState('');
+  const [status, setStatus] = useState('idle'); // idle | sending | sent
+  const [error, setError] = useState('');
+
+  const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+
+  const handleSend = useCallback(async () => {
+    const trimmed = email.trim();
+    if (!isValidEmail(trimmed)) { setError('Enter a valid email address.'); return; }
+    setError('');
+    setStatus('sending');
+    try {
+      const res = await fetch(`${API}/api/request-copy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enrollmentId, email: trimmed, heading }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Something went wrong.');
+      setStatus('sent');
+    } catch (e) {
+      setError(e.message);
+      setStatus('idle');
+    }
+  }, [email, enrollmentId, heading]);
+
+  const handleKey = (e) => { if (e.key === 'Enter' && status !== 'sending') handleSend(); };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal glass-card" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <span className="modal-title">Request Copy</span>
+          <button className="modal-close" onClick={onClose} aria-label="Close">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+            </svg>
+          </button>
+        </div>
+
+        {status === 'sent' ? (
+          <div className="modal-body modal-success">
+            <div className="modal-success-icon">
+              <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
+                <circle cx="18" cy="18" r="17" stroke="#30D158" strokeWidth="1.5"/>
+                <path d="M11 18l5 5 9-11" stroke="#30D158" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </div>
+            <p className="modal-success-text">A copy of <strong>{heading}</strong> has been sent to {email.trim()}.</p>
+            <button className="btn-primary" onClick={onClose}>Done</button>
+          </div>
+        ) : (
+          <div className="modal-body">
+            <p className="modal-desc">Enter your email address to receive a spreadsheet copy of these grades.</p>
+
+            <div className="field-group">
+              <label className="field-label" htmlFor="requestEmail">Email Address</label>
+              <input
+                id="requestEmail"
+                className="field-input"
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                onKeyDown={handleKey}
+                placeholder="you@example.com"
+                autoComplete="email"
+                disabled={status === 'sending'}
+              />
+            </div>
+
+            {error && <ErrorBanner message={error} onDismiss={() => setError('')} />}
+
+            <button
+              className="btn-primary"
+              onClick={handleSend}
+              disabled={status === 'sending' || !email.trim()}
+            >
+              {status === 'sending' ? <><Spinner /> Sending</> : 'Send Copy'}
+            </button>
+
+            <p className="modal-disclaimer">
+              This system was created to assist students who have forgotten their login credentials for the official BCC portal. All data is retrieved directly from the official portal using public GET requests and is not stored on this server.
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function GradesScreen({ enrollment, studentName, onBack }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [showRequestModal, setShowRequestModal] = useState(false);
 
   React.useEffect(() => {
     setLoading(true);
@@ -391,9 +486,26 @@ function GradesScreen({ enrollment, studentName, onBack }) {
                 <p className="empty-text">Grade details are not available for this enrollment. The portal may require authentication to display them.</p>
               </div>
             )}
+
+            {data.grades && data.grades.length > 0 && (
+              <button className="btn-request-copy" onClick={() => setShowRequestModal(true)}>
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M2 4l6 4.5L14 4M2 4v8h12V4M2 4h12" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+                Request Copy
+              </button>
+            )}
           </>
         )}
       </div>
+
+      {showRequestModal && (
+        <RequestCopyModal
+          enrollmentId={enrollment.enrollmentId}
+          heading={getStudentInfoLine()}
+          onClose={() => setShowRequestModal(false)}
+        />
+      )}
     </div>
   );
 }
