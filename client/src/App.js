@@ -76,7 +76,7 @@ function ErrorBanner({ message, onDismiss }) {
 
 // ── Request Copy Modal ──────────────────────────────────────────────────────
 
-function RequestCopyModal({ isOpen, onClose, onSend, loading, error }) {
+function RequestCopyModal({ isOpen, onClose, onSend, loading, error, success }) {
   const [email, setEmail] = useState('');
   const modalRef = useRef(null);
 
@@ -100,7 +100,7 @@ function RequestCopyModal({ isOpen, onClose, onSend, loading, error }) {
       <div className="modal-content glass-card">
         <div className="modal-header">
           <h3 className="modal-title">Request Grade Copy</h3>
-          <button className="modal-close" onClick={onClose} aria-label="Close">
+          <button className="modal-close" onClick={onClose} aria-label="Close" disabled={loading}>
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
               <path d="M4 4l12 12M16 4L4 16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
             </svg>
@@ -108,34 +108,48 @@ function RequestCopyModal({ isOpen, onClose, onSend, loading, error }) {
         </div>
         <form onSubmit={handleSubmit}>
           <div className="modal-body">
-            <p className="modal-desc">
-              Enter your email address to receive a copy of your grades in HTML format.
-              The file will be sent as an attachment.
-            </p>
-            <div className="field-group">
-              <label className="field-label" htmlFor="requestEmail">Email Address</label>
-              <input
-                id="requestEmail"
-                className="field-input"
-                type="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                placeholder="you@example.com"
-                autoComplete="email"
-                disabled={loading}
-                required
-              />
+            {success ? (
+              <div className="modal-success">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                  <circle cx="10" cy="10" r="9" stroke="#34C759" strokeWidth="1.5"/>
+                  <path d="M6 10l3 3 5-6" stroke="#34C759" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+                <span>Grade copy sent successfully! Please check your email.</span>
+              </div>
+            ) : (
+              <>
+                <p className="modal-desc">
+                  Enter your email address to receive a copy of your grades in HTML format.
+                  The file will be sent as an attachment.
+                </p>
+                <div className="field-group">
+                  <label className="field-label" htmlFor="requestEmail">Email Address</label>
+                  <input
+                    id="requestEmail"
+                    className="field-input"
+                    type="email"
+                    value={email}
+                    onChange={e => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    autoComplete="email"
+                    disabled={loading}
+                    required
+                  />
+                </div>
+                {error && <ErrorBanner message={error} onDismiss={() => {}} />}
+              </>
+            )}
+          </div>
+          {!success && (
+            <div className="modal-footer">
+              <button type="button" className="btn-secondary" onClick={onClose} disabled={loading}>
+                Cancel
+              </button>
+              <button type="submit" className="btn-primary" disabled={loading || !email.trim()}>
+                {loading ? <><Spinner /> Sending...</> : 'Send Copy'}
+              </button>
             </div>
-            {error && <ErrorBanner message={error} onDismiss={() => {}} />}
-          </div>
-          <div className="modal-footer">
-            <button type="button" className="btn-secondary" onClick={onClose} disabled={loading}>
-              Cancel
-            </button>
-            <button type="submit" className="btn-primary" disabled={loading || !email.trim()}>
-              {loading ? <><Spinner /> Sending...</> : 'Send Copy'}
-            </button>
-          </div>
+          )}
         </form>
         <div className="modal-disclaimer">
           <p>
@@ -223,7 +237,7 @@ function LookupScreen({ onResult }) {
           </button>
         </div>
 
-        <p className="footer-note">Data is fetched directly from the BCC portal.</p>
+        <p className="footer-note">Data is fetched directly from the BCC portal. This system is used and created for students who forgot their login credentials.</p>
       </div>
     </div>
   );
@@ -364,7 +378,6 @@ function GradesScreen({ enrollment, studentName, onBack }) {
     setSendSuccess(false);
     
     try {
-      // Prepare the data for the email
       const payload = {
         email,
         enrollmentId: enrollment.enrollmentId,
@@ -392,7 +405,7 @@ function GradesScreen({ enrollment, studentName, onBack }) {
       setTimeout(() => {
         setModalOpen(false);
         setSendSuccess(false);
-      }, 2000);
+      }, 3000);
     } catch (e) {
       setSendError(e.message);
     } finally {
