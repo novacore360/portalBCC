@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import './App.css';
 
 const API = process.env.REACT_APP_API_URL || '';
@@ -70,6 +70,81 @@ function ErrorBanner({ message, onDismiss }) {
           <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
         </svg>
       </button>
+    </div>
+  );
+}
+
+// ── Request Copy Modal ──────────────────────────────────────────────────────
+
+function RequestCopyModal({ isOpen, onClose, onSend, loading, error }) {
+  const [email, setEmail] = useState('');
+  const modalRef = useRef(null);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (email.trim()) {
+      onSend(email.trim());
+    }
+  };
+
+  const handleOverlayClick = (e) => {
+    if (e.target === modalRef.current) {
+      onClose();
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="modal-overlay" ref={modalRef} onClick={handleOverlayClick}>
+      <div className="modal-content glass-card">
+        <div className="modal-header">
+          <h3 className="modal-title">Request Grade Copy</h3>
+          <button className="modal-close" onClick={onClose} aria-label="Close">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path d="M4 4l12 12M16 4L4 16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+            </svg>
+          </button>
+        </div>
+        <form onSubmit={handleSubmit}>
+          <div className="modal-body">
+            <p className="modal-desc">
+              Enter your email address to receive a copy of your grades in HTML format.
+              The file will be sent as an attachment.
+            </p>
+            <div className="field-group">
+              <label className="field-label" htmlFor="requestEmail">Email Address</label>
+              <input
+                id="requestEmail"
+                className="field-input"
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                autoComplete="email"
+                disabled={loading}
+                required
+              />
+            </div>
+            {error && <ErrorBanner message={error} onDismiss={() => {}} />}
+          </div>
+          <div className="modal-footer">
+            <button type="button" className="btn-secondary" onClick={onClose} disabled={loading}>
+              Cancel
+            </button>
+            <button type="submit" className="btn-primary" disabled={loading || !email.trim()}>
+              {loading ? <><Spinner /> Sending...</> : 'Send Copy'}
+            </button>
+          </div>
+        </form>
+        <div className="modal-disclaimer">
+          <p>
+            This system is used and created for students who forgot their login credentials. 
+            All data is requested from the main BCC portal using GET requests. 
+            Your email will only be used to send this grade copy.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -186,7 +261,6 @@ function EnrollmentsScreen({ data, onViewGrades, onBack }) {
   const { studentId, studentName, enrollments } = data;
   const displayName = formatStudentName(studentName) || studentId;
   
-  // Get avatar letter from student name
   const getAvatarLetter = () => {
     if (studentName && studentName !== 'Student') {
       if (studentName.includes(',')) {
@@ -246,6 +320,10 @@ function GradesScreen({ enrollment, studentName, onBack }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [modalOpen, setModalOpen] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState('');
+  const [sendSuccess, setSendSuccess] = useState(false);
 
   React.useEffect(() => {
     setLoading(true);
@@ -278,6 +356,48 @@ function GradesScreen({ enrollment, studentName, onBack }) {
     if (semester) parts.push(semester);
 
     return parts.length > 0 ? parts.join(' | ') : 'Student Grades';
+  };
+
+  const handleRequestCopy = async (email) => {
+    setSending(true);
+    setSendError('');
+    setSendSuccess(false);
+    
+    try {
+      // Prepare the data for the email
+      const payload = {
+        email,
+        enrollmentId: enrollment.enrollmentId,
+        studentName: data?.studentInfo?.name || studentName || 'Student',
+        course: data?.studentInfo?.course || enrollment.course || '',
+        schoolYear: enrollment.schoolYear || '',
+        semester: semesterLabel(enrollment.semester) || enrollment.semester || '',
+        grades: data?.grades || [],
+        gwa: data?.gwa || 'N/A',
+        remarks: data?.remarks || 'N/A',
+        studentInfo: data?.studentInfo || {},
+        enrollment: enrollment
+      };
+      
+      const res = await fetch(`${API}/api/send-grade-copy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || 'Failed to send email.');
+      
+      setSendSuccess(true);
+      setTimeout(() => {
+        setModalOpen(false);
+        setSendSuccess(false);
+      }, 2000);
+    } catch (e) {
+      setSendError(e.message);
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
@@ -330,56 +450,71 @@ function GradesScreen({ enrollment, studentName, onBack }) {
             )}
 
             {data.grades && data.grades.length > 0 ? (
-              <div className="grades-list">
-                <div className="section-label">Subjects</div>
-                {data.grades.map((g, i) => (
-                  <div className="glass-card grade-row" key={i}>
-                    <div className="grade-subject">
-                      <span className="grade-code">{g.subjectCode}</span>
-                      {g.subjectTitle && (
-                        <span className="grade-title">{g.subjectTitle}</span>
-                      )}
-                    </div>
-                    <div className="grade-scores">
-                      {g.units && (
-                        <div className="grade-stat">
-                          <span className="grade-stat-label">Units</span>
-                          <span className="grade-stat-value">{g.units}</span>
-                        </div>
-                      )}
-                      {g.midterm && (
-                        <div className="grade-stat">
-                          <span className="grade-stat-label">Midterm</span>
-                          <span className="grade-stat-value" style={{ color: gradeColor(g.midterm) }}>
-                            {g.midterm}
-                          </span>
-                        </div>
-                      )}
-                      {g.finals && (
-                        <div className="grade-stat">
-                          <span className="grade-stat-label">Finals</span>
-                          <span className="grade-stat-value" style={{ color: gradeColor(g.finals) }}>
-                            {g.finals}
-                          </span>
-                        </div>
-                      )}
-                      {g.finalGrade && (
-                        <div className="grade-stat final">
-                          <span className="grade-stat-label">Final</span>
-                          <span className="grade-stat-value" style={{ color: gradeColor(g.finalGrade) }}>
-                            {g.finalGrade}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                    {g.remarks && (
-                      <div className={`grade-remark ${g.remarks.toLowerCase().includes('pass') ? 'passed' : g.remarks.toLowerCase().includes('fail') ? 'failed' : ''}`}>
-                        {g.remarks}
+              <>
+                <div className="grades-list">
+                  <div className="section-label">Subjects</div>
+                  {data.grades.map((g, i) => (
+                    <div className="glass-card grade-row" key={i}>
+                      <div className="grade-subject">
+                        <span className="grade-code">{g.subjectCode}</span>
+                        {g.subjectTitle && (
+                          <span className="grade-title">{g.subjectTitle}</span>
+                        )}
                       </div>
-                    )}
-                  </div>
-                ))}
-              </div>
+                      <div className="grade-scores">
+                        {g.units && (
+                          <div className="grade-stat">
+                            <span className="grade-stat-label">Units</span>
+                            <span className="grade-stat-value">{g.units}</span>
+                          </div>
+                        )}
+                        {g.midterm && (
+                          <div className="grade-stat">
+                            <span className="grade-stat-label">Midterm</span>
+                            <span className="grade-stat-value" style={{ color: gradeColor(g.midterm) }}>
+                              {g.midterm}
+                            </span>
+                          </div>
+                        )}
+                        {g.finals && (
+                          <div className="grade-stat">
+                            <span className="grade-stat-label">Finals</span>
+                            <span className="grade-stat-value" style={{ color: gradeColor(g.finals) }}>
+                              {g.finals}
+                            </span>
+                          </div>
+                        )}
+                        {g.finalGrade && (
+                          <div className="grade-stat final">
+                            <span className="grade-stat-label">Final</span>
+                            <span className="grade-stat-value" style={{ color: gradeColor(g.finalGrade) }}>
+                              {g.finalGrade}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                      {g.remarks && (
+                        <div className={`grade-remark ${g.remarks.toLowerCase().includes('pass') ? 'passed' : g.remarks.toLowerCase().includes('fail') ? 'failed' : ''}`}>
+                          {g.remarks}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* ── Request Copy Button ── */}
+                <button
+                  className="btn-primary request-copy-btn"
+                  onClick={() => setModalOpen(true)}
+                >
+                  Request Copy
+                  <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                    <rect x="2" y="2" width="10" height="12" rx="1" stroke="currentColor" strokeWidth="1.5"/>
+                    <path d="M6 6h8v10a1 1 0 01-1 1H7a1 1 0 01-1-1V6z" stroke="currentColor" strokeWidth="1.5"/>
+                    <path d="M9 3V1M12 3V1M15 3V1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                  </svg>
+                </button>
+              </>
             ) : (
               <div className="empty-state glass-card">
                 <div className="empty-icon">
@@ -394,6 +529,16 @@ function GradesScreen({ enrollment, studentName, onBack }) {
           </>
         )}
       </div>
+
+      {/* ── Request Copy Modal ── */}
+      <RequestCopyModal
+        isOpen={modalOpen}
+        onClose={() => { if (!sending) { setModalOpen(false); setSendError(''); setSendSuccess(false); } }}
+        onSend={handleRequestCopy}
+        loading={sending}
+        error={sendError}
+        success={sendSuccess}
+      />
     </div>
   );
 }
